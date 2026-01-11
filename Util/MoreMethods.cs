@@ -117,4 +117,14 @@ internal static class MoreMethods
         JObject obj = JObject.Parse(s);
         return JsonConvert.SerializeObject(obj, Formatting.Indented);
     }
+
+    public static void WriteTextToFile(string path, string text)
+    {
+        FileStream fs = new FileStream(path, FileMode.Append);
+        StreamWriter sw = new StreamWriter(fs);
+        sw.Write(text);
+        sw.Flush();
+        sw.Close();
+        fs.Close();
+    }
 }

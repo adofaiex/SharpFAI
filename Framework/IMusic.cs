@@ -13,6 +13,11 @@ public interface IMusic
     void Load(string path);
     
     /// <summary>
+    /// Preload audio to reduce playback latency / 预加载音频以减少播放延迟
+    /// </summary>
+    void Preload();
+    
+    /// <summary>
     /// Play the music / 播放音乐
     /// </summary>
     void Play();

@@ -6,7 +6,7 @@
     <AssemblyName>SharpFAI</AssemblyName>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <!-- Version Configuration -->
-    <VersionPrefix>1.1.0</VersionPrefix>
+    <VersionPrefix>1.1.1</VersionPrefix>
     <Version>$(VersionPrefix)</Version>
     <!-- NuGet Package Configuration -->
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
@@ -31,9 +31,5 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
-    <None Remove="SharpFAI-Player\**" />
-  </ItemGroup>
-  <ItemGroup>
-    <Compile Remove="SharpFAI-Player\**" />
   </ItemGroup>
 </Project>

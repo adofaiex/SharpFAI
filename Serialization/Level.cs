@@ -90,7 +90,20 @@ namespace SharpFAI.Serialization
             }
             deserializedEvents = DeserializeEvents();
         }
-
+        
+        public static bool operator ==(Level a, Level b)
+        {
+            if (a.pathToLevel != null && b.pathToLevel != null) return a.pathToLevel == b.pathToLevel;
+            return a.root == b.root &&
+                   a.decorations == b.decorations &&
+                   a.settings == b.settings &&
+                   a.angleData == b.angleData &&
+                   a.actions == b.actions;
+        }
+        public static bool operator !=(Level a, Level b)
+        {
+            return !(a == b);
+        }
         /// <summary>
         /// 通过文件路径加载并初始化 Level 类的新实例
         /// Initializes a new instance of the Level class by loading from a file path
@@ -117,6 +130,7 @@ namespace SharpFAI.Serialization
                 author = "Created Level by SharpFAI",
                 bpm = 100,
                 offset = 0,
+                pitch = 100
             });
             root["actions"] = new JArray();
             root["decorations"] = new JArray();
@@ -222,6 +236,7 @@ namespace SharpFAI.Serialization
                 }
             }
             actions.Add(newEvent);
+            root["actions"] = actions;
         }
 
         /// <summary>
@@ -246,6 +261,7 @@ namespace SharpFAI.Serialization
             {
                 settings.Remove(setting);
             }
+            root["settings"] = settings;
         }
 
         /// <summary>
@@ -314,6 +330,7 @@ namespace SharpFAI.Serialization
                     i--;
                 }
             }
+            root["actions"] = actions;
             if (decorations == null) return;
             for (int i = 0; i < decorations.Count; i++)
             {
@@ -324,6 +341,7 @@ namespace SharpFAI.Serialization
                     i--;
                 }
             }
+            root["decorations"] = decorations;
         }
 
         /// <summary>
@@ -354,6 +372,7 @@ namespace SharpFAI.Serialization
                     actions.Remove(action);
                 if (++eventsRemoved == count) break;
             }
+            root["actions"] = actions;
         }
 
         /// <summary>
@@ -409,6 +428,7 @@ namespace SharpFAI.Serialization
                 }
             }
             decorations.Add(newDecoration);
+            root["decorations"] = decorations;
         }
 
         /// <summary>
