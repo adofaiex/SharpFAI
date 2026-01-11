@@ -17,6 +17,10 @@ public static class Test
         Console.WriteLine(level2.GetNoteTimes().Count);
          Level level = Level.CreateNewLevel();
          Console.WriteLine(level.GetNoteTimes().Count);
+         if (level != null)
+         {
+             Console.WriteLine("Not Null!");
+         }
         level2.AddSegmentsAsFloor(1.6666666666666666,712);
         level2.Save();
     }

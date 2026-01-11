@@ -143,9 +143,9 @@ Provides preset level settings through `PresetSettings` static properties.
 
 ### Event Types / 事件类型
 
-The library supports all ADOFAI event types including:
+The library supports ~~all~~ ADOFAI event types including:
 
-库支持所有ADOFAI事件类型，包括：
+库支持部分ADOFAI事件类型，包括：
 
 - `SetSpeed` - Set BPM or speed multiplier / 设置BPM或速度倍率
 - `Twirl` - Rotation event / 旋转事件
@@ -156,7 +156,6 @@ The library supports all ADOFAI event types including:
 - `PositionTrack` - Track positioning / 轨道定位
 - `MultiPlanet` - Multiple planets / 多行星
 - `Bookmark` - Bookmark marker / 书签标记
-- And 60+ more event types / 以及60多种其他事件类型
 
 ### Utility Classes / 工具类
 

@@ -93,13 +93,21 @@ namespace SharpFAI.Serialization
         
         public static bool operator ==(Level a, Level b)
         {
+            // 处理两个对象都为 null 的情况
+            if (ReferenceEquals(a, b)) return true;
+            // 处理其中一个为 null 的情况
+            if (a is null || b is null) return false;
+            
+            // 如果都有路径，则比较路径
             if (a.pathToLevel != null && b.pathToLevel != null) return a.pathToLevel == b.pathToLevel;
-            return a.root == b.root &&
-                   a.decorations == b.decorations &&
-                   a.settings == b.settings &&
-                   a.angleData == b.angleData &&
-                   a.actions == b.actions;
+            // 否则比较各个属性
+            return JToken.DeepEquals(a.root, b.root) &&
+                   JToken.DeepEquals(a.decorations, b.decorations) &&
+                   JToken.DeepEquals(a.settings, b.settings) &&
+                   JToken.DeepEquals(a.angleData, b.angleData) &&
+                   JToken.DeepEquals(a.actions, b.actions);
         }
+        
         public static bool operator !=(Level a, Level b)
         {
             return !(a == b);
