@@ -3,6 +3,7 @@ using System.Drawing;
 using System.IO;
 using System.Reflection;
 using System.Text;
+using System.Threading.Tasks;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -124,6 +125,16 @@ internal static class MoreMethods
         StreamWriter sw = new StreamWriter(fs);
         sw.Write(text);
         sw.Flush();
+        sw.Close();
+        fs.Close();
+    }
+    
+    public static async Task WriteTextToFileAsync(string path, string text)
+    {
+        FileStream fs = new FileStream(path, FileMode.Append);
+        StreamWriter sw = new StreamWriter(fs);
+        await sw.WriteAsync(text);
+        await sw.FlushAsync();
         sw.Close();
         fs.Close();
     }

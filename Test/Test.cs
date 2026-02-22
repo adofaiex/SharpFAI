@@ -1,28 +1,20 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using Newtonsoft.Json.Linq;
 using SharpFAI.Events;
 using SharpFAI.Serialization;
 using SharpFAI.Util;
 
-namespace SharpFAI.Test;
+namespace SharpFAI;
 #pragma warning disable CS1591
 #if DEBUG
-public static class Test
+
+public static class TestClass
 {
     public static void Main2()
     {
-        Level level2 = new Level(pathToLevel: @"D:\ADOFAILevels\THE STAR SYSTEM'S CALLING\lead.adofai");
-        Console.WriteLine(level2.GetNoteTimes().Count);
-         Level level = Level.CreateNewLevel();
-         Console.WriteLine(level.GetNoteTimes().Count);
-         if (level != null)
-         {
-             Console.WriteLine("Not Null!");
-         }
-        level2.AddSegmentsAsFloor(1.6666666666666666,712);
-        level2.Save();
+        Level level2 = @"D:\ADOFAILevels\7777\level2.adofai";
+        Console.WriteLine(level2.angleData);
     }
 
     extension(Level level)
@@ -92,15 +84,34 @@ public static class Test
             }
         }
 
+        public void DoubleFloors(int floor,double startBPM,int startCount, int mulCount)
+        {
+            for (int i = 0; i < mulCount; i++)
+            {
+                
+                level.AddEvent(new SetSpeed()
+                {
+                    Floor = floor + startCount,
+                    BeatsPerMinute = startBPM,
+                    SpeedType = EventEnums.SpeedType.Bpm
+                });
+                for (int j = 0; j < startCount; j++)
+                {
+                    level.angleData.Add(0);
+                }
+                startBPM *= 2;
+                startCount *= 2;
+            }
+            level.Save();
+        }
         public void ToLinerFloors()
         {
             var bpmList = new List<double>();
             for (int i = 0; i < level.GetNoteTimes().Count -1; i++)
             {
-                if (level.GetNoteTimes()[i + 1] - level.GetNoteTimes()[i] == 0) continue;
-                bpmList.Add(60000 / (level.GetNoteTimes()[i + 1] - level.GetNoteTimes()[i]));
+                if (level.GetNoteTimes()[i + 1].Item1 - level.GetNoteTimes()[i].Item1 == 0) continue;
+                bpmList.Add(60000 / (level.GetNoteTimes()[i + 1].Item1 - level.GetNoteTimes()[i].Item1));
             }
-
             level.actions.Clear();
             level.angleData.Clear();
             level.angleData.Add(0);

@@ -15,8 +15,8 @@ namespace SharpFAI.Util;
 /// </summary>
 public static class LevelUtils
 {
-    private static List<double> noteTimesCache = [];
-    private static List<double> noteTimesCacheWithOffset = [];
+    private static List<(double,bool)> noteTimesCache = [];
+    private static List<(double,bool)> noteTimesCacheWithOffset = [];
     private static List<double> allSpeedChange = [];
     private static Level currentLevel = Level.CreateNewLevel();
 
@@ -28,6 +28,7 @@ public static class LevelUtils
         public double bpm;
         public int direction;
         public double extraHold;
+        public double extraBeats;
         public bool midr;
         public int multiPlanet;
     }
@@ -56,7 +57,7 @@ public static class LevelUtils
         /// </summary>
         /// <param name="addOffset">Whether to add the level settings offset to the times (default: false) / 是否将关卡设置中的偏移添加到时间中（默认：false）</param>
         /// <returns>List of note times in milliseconds / 以毫秒为单位的音符时间列表</returns>
-        public List<double> GetNoteTimes(bool addOffset = false)
+        public List<(double,bool)> GetNoteTimes(bool addOffset = false)
         {
             CheckCache(level);
             if (noteTimesCache.Count > 0 && !addOffset) return noteTimesCache;
@@ -76,6 +77,7 @@ public static class LevelUtils
                         bpm = 0,
                         direction = 0,
                         extraHold = 0,
+                        extraBeats = 0,
                         midr = true,
                         multiPlanet = -1
                     });
@@ -88,6 +90,7 @@ public static class LevelUtils
                         bpm = 0,
                         direction = 0,
                         extraHold = 0,
+                        extraBeats = 0,
                         midr = false,
                         multiPlanet = -1
                     });
@@ -101,11 +104,11 @@ public static class LevelUtils
                 bpm = 0,
                 direction = 0,
                 extraHold = 0,
+                extraBeats = 0,
                 midr = false,
                 multiPlanet = -1
             });
-
-
+            
             double bpm = level.GetSetting<double>("bpm");
             double pitch = level.GetSetting<int>("pitch") / 100.0;
             var levelEvents = level.DeserializeEvents();
@@ -142,11 +145,12 @@ public static class LevelUtils
                             break;
 
                         case EventType.Pause:
-                            ob.extraHold = eventValue.ToEvent<Pause>().Duration / 2.0;
+                            ob.extraBeats = eventValue.ToEvent<Pause>().Duration / 2.0;
                             break;
 
                         case EventType.Hold:
                             ob.extraHold = eventValue.ToEvent<Hold>().Duration;
+                            ob.extraBeats = eventValue.ToEvent<Hold>().Duration;
                             break;
 
                         case EventType.MultiPlanet:
@@ -155,7 +159,7 @@ public static class LevelUtils
                             break;
 
                         case EventType.FreeRoam:
-                            ob.extraHold = (eventValue.ToEvent<FreeRoam>().Duration - 1) / 2.0;
+                            ob.extraBeats = (eventValue.ToEvent<FreeRoam>().Duration - 1) / 2.0;
                             break;
                     }
 
@@ -190,7 +194,7 @@ public static class LevelUtils
                 }
             }
 
-            List<double> noteTime = [];
+            List<(double,bool)> noteTime = [];
 
             double curAngle = 0;
             double curTime = 0;
@@ -208,7 +212,7 @@ public static class LevelUtils
                     ? 360
                     : Fmod((curAngle - destAngle) * o.direction, 360);
 
-                pAngle += o.extraHold * 360;
+                pAngle += o.extraBeats * 360;
 
                 // 三球处理逻辑
                 double angleTemp = pAngle;
@@ -231,13 +235,13 @@ public static class LevelUtils
                 curTime += deltaTime;
 
                 curAngle = destAngle;
-                noteTime.Add(curTime);
+                noteTime.Add((curTime,o.extraHold > 0));
             }
 
             noteTimesCache = noteTime;
             if (addOffset)
             {
-                noteTimesCacheWithOffset = noteTime.Select(t => t + level.GetSetting<int>("offset")).ToList();
+                noteTimesCacheWithOffset = noteTime.Select(t => (t.Item1 + level.GetSetting<int>("offset"), t.Item2)).ToList();
             }
 
             return noteTime;
@@ -593,7 +597,7 @@ public static class LevelUtils
                     tile.lastFloor = tileArr[i - 1];
                 }
 
-                tile.entryTime = noteTimes[i];
+                tile.entryTime = noteTimes[i].Item1;
                 tile.renderOrder = -i;
                 tile.events = allEvents.Where(x => x.Floor == i).ToList();
                 floors.Add(tile);
@@ -612,7 +616,7 @@ public static class LevelUtils
         /// <returns>The floor index / 地板索引</returns>
         public int GetFloorIndexByNoteTime(double noteTimeSecond)
         {
-            List<double> noteTimes = level.GetNoteTimes(true);
+            List<double> noteTimes = level.GetNoteTimes(true).Select(a => a.Item1).ToList();
             double targetTime = noteTimeSecond * 1000;
 
             int left = 0;

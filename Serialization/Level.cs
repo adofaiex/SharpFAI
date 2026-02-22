@@ -20,7 +20,22 @@ namespace SharpFAI.Serialization
         /// 表示关卡数据的 JSON 对象
         /// JSON object representing level data
         /// </summary>
-        public JObject root{ get; }
+        public JObject root
+        {
+            get
+            {
+                _root["actions"] = actions;
+                _root["angleData"] = angleData;
+                _root["settings"] = settings;
+                if (decorations != null)
+                {
+                    _root["decorations"] = decorations;
+                }
+                return _root;
+            }
+        }
+        
+        private readonly JObject _root;
         
         /// <summary>
         /// 表示关卡设置的 JSON 对象
@@ -71,22 +86,22 @@ namespace SharpFAI.Serialization
         /// <param name="levelInfo">表示关卡信息的字典 / Dictionary representing level information</param>
         public Level(Dictionary<string, object>? levelInfo)
         {
-            root = JObject.Parse(
+            _root = JObject.Parse(
                 JsonConvert.SerializeObject(levelInfo));
-            actions = root["actions"].ToObject<JArray>();
-            if (root.ContainsKey("angleData"))
+            actions = _root["actions"].ToObject<JArray>();
+            if (_root.ContainsKey("angleData"))
             {
-                angleData = root["angleData"].ToObject<JArray>();
+                angleData = _root["angleData"].ToObject<JArray>();
                 angles = angleData.ToObject<List<double>>().AsReadOnly();
             } 
-            else if (root.ContainsKey("pathData"))
+            else if (_root.ContainsKey("pathData"))
             {
                 InitAngleData();
             }
-            settings = root["settings"].ToObject<JObject>();
+            settings = _root["settings"].ToObject<JObject>();
             if (settings["version"].Value<int>() > 10)
             {
-                decorations = root["decorations"].ToObject<JArray>();
+                decorations = _root["decorations"].ToObject<JArray>();
             }
             deserializedEvents = DeserializeEvents();
         }
@@ -101,7 +116,7 @@ namespace SharpFAI.Serialization
             // 如果都有路径，则比较路径
             if (a.pathToLevel != null && b.pathToLevel != null) return a.pathToLevel == b.pathToLevel;
             // 否则比较各个属性
-            return JToken.DeepEquals(a.root, b.root) &&
+            return JToken.DeepEquals(a._root, b._root) &&
                    JToken.DeepEquals(a.decorations, b.decorations) &&
                    JToken.DeepEquals(a.settings, b.settings) &&
                    JToken.DeepEquals(a.angleData, b.angleData) &&
@@ -111,6 +126,26 @@ namespace SharpFAI.Serialization
         public static bool operator !=(Level a, Level b)
         {
             return !(a == b);
+        }
+        /// <summary>
+        /// 通过文件路径加载并初始化 Level 类的新实例,使用隐式转换符
+        /// Initializes a new instance of the Level class by loading from a file path, using the implicit conversion operator
+        /// </summary>
+        /// <param name="pathToLevel">关卡文件路径 / Path to the level file</param>
+        public static implicit operator Level(string pathToLevel)
+        { 
+            return new Level(SimpleJSON.DeserializeFile(pathToLevel));
+        }
+        
+        /// <summary>
+        /// 隐式转换，将Level对象转换为JSON
+        /// Implicit conversion, converting the Level object to JSON
+        /// </summary>
+        /// <param name="level"></param>
+        /// <returns></returns>
+        public static implicit operator JObject(Level level)
+        {
+            return JObject.Parse(level.ToString());
         }
         /// <summary>
         /// 通过文件路径加载并初始化 Level 类的新实例
@@ -156,7 +191,7 @@ namespace SharpFAI.Serialization
         private void InitAngleData()
         {
             if (this.angles?.Any() ?? false) return;
-            List<TileAngle> tileAngles = root["pathData"]
+            List<TileAngle> tileAngles = _root["pathData"]
                 .ToObject<string>()
                 .ToCharArray()
                 .Select(c => TileAngle.AngleCharMap[c])
@@ -173,9 +208,9 @@ namespace SharpFAI.Serialization
                 angles.Add(staticAngle);
             }
             this.angles = angles.AsReadOnly();
-            root.Remove("pathData");
+            _root.Remove("pathData");
             angleData = JArray.FromObject(angles);
-            root.Add("angleData", angleData);
+            _root.Add("angleData", angleData);
         }
 
         /// <summary>
@@ -244,7 +279,7 @@ namespace SharpFAI.Serialization
                 }
             }
             actions.Add(newEvent);
-            root["actions"] = actions;
+            _root["actions"] = actions;
         }
 
         /// <summary>
@@ -269,7 +304,7 @@ namespace SharpFAI.Serialization
             {
                 settings.Remove(setting);
             }
-            root["settings"] = settings;
+            _root["settings"] = settings;
         }
 
         /// <summary>
@@ -338,7 +373,7 @@ namespace SharpFAI.Serialization
                     i--;
                 }
             }
-            root["actions"] = actions;
+            _root["actions"] = actions;
             if (decorations == null) return;
             for (int i = 0; i < decorations.Count; i++)
             {
@@ -349,7 +384,7 @@ namespace SharpFAI.Serialization
                     i--;
                 }
             }
-            root["decorations"] = decorations;
+            _root["decorations"] = decorations;
         }
 
         /// <summary>
@@ -380,7 +415,7 @@ namespace SharpFAI.Serialization
                     actions.Remove(action);
                 if (++eventsRemoved == count) break;
             }
-            root["actions"] = actions;
+            _root["actions"] = actions;
         }
 
         /// <summary>
@@ -436,7 +471,7 @@ namespace SharpFAI.Serialization
                 }
             }
             decorations.Add(newDecoration);
-            root["decorations"] = decorations;
+            _root["decorations"] = decorations;
         }
 
         /// <summary>
@@ -466,12 +501,12 @@ namespace SharpFAI.Serialization
         /// <returns>JSON string representation of the level / 关卡的JSON字符串表示</returns>
         public string ToString(bool indent = true)
         {
-            root["actions"] = actions;
-            root["angleData"] = angleData;
-            root["settings"] = settings;
+            _root["actions"] = actions;
+            _root["angleData"] = angleData;
+            _root["settings"] = settings;
             if (decorations != null)
             {
-                root["decorations"] = decorations;
+                _root["decorations"] = decorations;
             }
             JsonSerializerSettings serializerSettings = new JsonSerializerSettings();
             serializerSettings.Formatting = Formatting.Indented;
@@ -479,7 +514,7 @@ namespace SharpFAI.Serialization
             {
                 serializerSettings.Formatting = Formatting.None;
             }
-            return JsonConvert.SerializeObject(root, serializerSettings);
+            return JsonConvert.SerializeObject(_root, serializerSettings);
         }
 
         /// <summary>
