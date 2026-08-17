@@ -82,8 +82,11 @@ public interface IText
 /// </summary>
 public enum TextAlign
 {
+	/// <summary>左对齐 / Left aligned</summary>
 	Left,
+	/// <summary>居中对齐 / Center aligned</summary>
 	Center,
+	/// <summary>右对齐 / Right aligned</summary>
 	Right
 }
 

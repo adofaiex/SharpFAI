@@ -3,6 +3,10 @@ using SharpFAI.Serialization;
 
 namespace SharpFAI.Events;
 
+/// <summary>
+/// 移动相机事件
+/// MoveCamera event
+/// </summary>
 public class MoveCamera : BaseEvent
 {
     /// <summary>
@@ -61,6 +65,19 @@ public class MoveCamera : BaseEvent
     [JsonProperty("eventTag")]
     public string EventTag { get; set; }
 
+    /// <summary>
+    /// 初始化一个移动相机事件
+    /// Initializes a new MoveCamera event
+    /// </summary>
+    /// <param name="floor">所在地板 / Floor number</param>
+    /// <param name="duration">持续时间 / Duration in seconds</param>
+    /// <param name="relativeTo">移动参考类型 / Camera movement reference type</param>
+    /// <param name="position">位置 [x, y] / Position [x, y]</param>
+    /// <param name="rotation">旋转角度 / Rotation angle</param>
+    /// <param name="zoom">缩放百分比 / Zoom percentage</param>
+    /// <param name="angleOffset">角度偏移 / Angle offset</param>
+    /// <param name="ease">缓动函数 / Easing function</param>
+    /// <param name="eventTag">事件标签 / Event tag</param>
     public MoveCamera(int floor = 0,
         double duration = 0,
         EventEnums.CamMovementType relativeTo = EventEnums.CamMovementType.Player,

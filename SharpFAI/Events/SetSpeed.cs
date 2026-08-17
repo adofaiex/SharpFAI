@@ -3,6 +3,10 @@ using SharpFAI.Serialization;
 
 namespace SharpFAI.Events;
 
+/// <summary>
+/// 变速事件
+/// SetSpeed event
+/// </summary>
 public class SetSpeed : BaseEvent
 {
     /// <summary>
@@ -33,6 +37,14 @@ public class SetSpeed : BaseEvent
     [JsonProperty("angleOffset")]
     public double AngleOffset;
     
+    /// <summary>
+    /// 初始化一个变速事件
+    /// Initializes a new SetSpeed event
+    /// </summary>
+    /// <param name="speedType">速度类型 / Speed type</param>
+    /// <param name="beatsPerMinute">每分钟节拍数 / Beats per minute</param>
+    /// <param name="bpmMultiplier">BPM 倍率 / BPM multiplier</param>
+    /// <param name="angleOffset">角度偏移 / Angle offset</param>
     public SetSpeed(EventEnums.SpeedType speedType = EventEnums.SpeedType.Bpm,
         double beatsPerMinute = 100,
         double bpmMultiplier = 1,

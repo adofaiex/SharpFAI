@@ -6,7 +6,7 @@
     <AssemblyName>SharpFAI</AssemblyName>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <!-- Version Configuration -->
-    <VersionPrefix>1.1.3</VersionPrefix>
+    <VersionPrefix>1.1.4</VersionPrefix>
     <Version>$(VersionPrefix)</Version>
     <!-- NuGet Package Configuration -->
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
@@ -30,6 +30,6 @@
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="..\README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 </Project>

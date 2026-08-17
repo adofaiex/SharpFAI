@@ -1,22 +1,12 @@
-using System;
-using System.Collections.Generic;
 using Newtonsoft.Json.Linq;
 using SharpFAI.Events;
 using SharpFAI.Serialization;
 using SharpFAI.Util;
 
-namespace SharpFAI;
-#pragma warning disable CS1591
-#if DEBUG
+namespace SharpFAI.Tests;
 
-public static class TestClass
+public static class TestLevelUtils
 {
-    public static void Main2()
-    {
-        Level level2 = @"D:\ADOFAILevels\7777\level2.adofai";
-        Console.WriteLine(level2.angleData);
-    }
-
     extension(Level level)
     {
         public void SmoothScale(int start, int end, double startScale = 100d, double endScale = 200d)
@@ -75,6 +65,29 @@ public static class TestClass
             });
         }
 
+        public void RemoveAtStart(int count)
+        {
+            count -= 1;
+            level.RemoveEventsIf(a => a.Floor < count);
+            var ad = level.angleData.ToList();
+            ad.RemoveRange(0, count);
+            level.angleData.Clear();
+            ad.ForEach(level.angleData.Add);
+            foreach (var action in level.actions)
+            {
+                action["floor"] = action["floor"].ToObject<int>() - count;
+            }
+        }
+
+        public void RemoveAtEnd(int count)
+        {
+            level.RemoveEventsIf(a => a.Floor > count);
+            var ad = level.angleData.ToList();
+            ad.RemoveRange(count, ad.Count - count);
+            level.angleData.Clear();
+            ad.ForEach(level.angleData.Add);
+        }
+
         public void AddSegmentsAsFloor(double multiplier = 2, int count = 32)
         {
             double angle = 180 - 180 / multiplier;
@@ -84,6 +97,22 @@ public static class TestClass
             }
         }
 
+        public void MergeLevels(params Level[] levels)
+        {
+            int offset = level.angleData.Count;
+            for (int i = 0; i < levels.Length; i++)
+            {
+                var curlevel = levels[i];
+                var events = curlevel.DeserializeEvents();
+                events.Select(e =>
+                {
+                    e.Floor += offset;
+                    return e;
+                }).ToList().ForEach(level.AddEvent);
+                level.angleData.Add(curlevel.angleData.Select(a=>a.ToObject<double>()));
+                offset += curlevel.angleData.Count;
+            }
+        }
         public void DoubleFloors(int floor,double startBPM,int startCount, int mulCount)
         {
             for (int i = 0; i < mulCount; i++)
@@ -143,14 +172,8 @@ public static class TestClass
                 double currentCents = GetGlidePitch(startFrequency, endFrequency, progress);
                 current += 1 / currentCents;
                 noteTimes.Add(currentCents * 60);
-                Console.WriteLine($"迭代 {iteration}: progress={progress:F3}, currentCents={currentCents:F3}, current累计={current:F3}");
                 iteration++;
-            
-                // 防止无限循环
-                if (iteration > 1000) {
-                    Console.WriteLine("警告：循环迭代次数过多，强制退出");
-                    break;
-                }
+
             }
 
             // 计算剩余时间对应的BPM
@@ -159,10 +182,7 @@ public static class TestClass
                 // 使用结束频率来计算剩余时间的BPM
                 double finalBPM = endFrequency * 60;  // 将频率转换为BPM
                 noteTimes.Add(finalBPM);
-                Console.WriteLine($"剩余时间 {remainingTime:F3}, 使用结束频率计算BPM: {finalBPM:F3}");
             }
-        
-            Console.WriteLine($"总共生成 {noteTimes.Count} 个BPM值");
         
             // 添加角度数据
             for (int i = 0; i < noteTimes.Count; i++)
@@ -205,7 +225,47 @@ public static class TestClass
         
             Console.WriteLine($"GenerateGlide: 完成执行 - 在Floor {startFloor}添加了SetSpeed事件，BPM={baseBPM}");
         }
+        /// <summary>
+        /// 生成滑音
+        /// Generate a glide
+        /// </summary>
+        /// <param name="startFloor">开始的砖块 / The starting floor</param>
+        /// <param name="startFrequency">开始的音调 / The starting pitch</param>
+        /// <param name="endFrequency">结束的音调 / The ending</param>
+        /// <param name="duration">时长(秒) / Duration (in seconds)</param>
+        public void GenerateGlide(int startFloor, double startFrequency, double endFrequency, double duration)
+        {
+            if (startFloor < 0 || startFloor > level.angles.Count)
+                throw new ArgumentOutOfRangeException($"{nameof(startFloor)}:{startFloor}");
+            double current = 0;
+            List<double> noteTimes = [];
+            while (current < duration - 2 / endFrequency)
+            {
+                double currentPitch = GetGlidePitch(startFrequency, endFrequency, current / duration);
+                current += 1 / currentPitch;
+                noteTimes.Add(currentPitch * 60);
+            }
+
+            noteTimes.Add(1 / (duration - current) * 60);
+
+            for (int i = 0; i < noteTimes.Count; i++)
+            {
+                if (level.angles.Count - 1 < i)
+                {
+                    level.angleData.Add(0);
+                }
+                TestContext.Progress.WriteLine($"GenerateGlide: {i}: BPM={noteTimes[i]:F3}");
+
+                level.AddEvent(new SetSpeed()
+                {
+                    Floor = startFloor + i,
+                    BeatsPerMinute = noteTimes[i],
+                    SpeedType = EventEnums.SpeedType.Bpm
+                });
+            }
+        }
     }
+    
 
     internal static double GetGlidePitch(double startFreq, double endFreq, double percent)
     {
@@ -214,4 +274,3 @@ public static class TestClass
         return startFreq * Math.Pow(2, currentCents / 1200);
     }
 }
-#endif

@@ -69,7 +69,9 @@ public interface ITexture
 /// </summary>
 public enum TextureFilter
 {
+	/// <summary>邻近过滤（像素风）/ Nearest filtering (pixelated)</summary>
 	Nearest,
+	/// <summary>线性过滤（平滑）/ Linear filtering (smooth)</summary>
 	Linear
 }
 
@@ -78,7 +80,9 @@ public enum TextureFilter
 /// </summary>
 public enum TextureWrap
 {
+	/// <summary>重复环绕 / Repeat wrapping</summary>
 	Repeat,
+	/// <summary>边缘钳制 / Clamp to edge</summary>
 	ClampToEdge
 }
 

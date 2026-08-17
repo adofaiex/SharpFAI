@@ -17,9 +17,15 @@ public static class LevelUtils
 {
     private static List<(double,bool)> noteTimesCache = [];
     private static List<(double,bool)> noteTimesCacheWithOffset = [];
+    private static List<(double,bool)> noteTimesCacheNew = [];
+    private static List<(double,bool)> noteTimesCacheNewWithOffset = [];
     private static List<double> allSpeedChange = [];
     private static Level currentLevel = Level.CreateNewLevel();
 
+    /// <summary>
+    /// 进度回调事件（进度百分比 0-100，进度描述文本）
+    /// Progress callback event (progress percentage 0-100, progress description text)
+    /// </summary>
     public static event Action<int, string> progressCallback;
 
     private class ParsedChart
@@ -43,6 +49,8 @@ public static class LevelUtils
         {
             noteTimesCache = [];
             noteTimesCacheWithOffset = [];
+            noteTimesCacheNew = [];
+            noteTimesCacheNewWithOffset = [];
             allSpeedChange = [];
             currentLevel = level;
         }
@@ -251,6 +259,35 @@ public static class LevelUtils
             {
                 return angle / 180 * (60 / bpm) * 1000;
             }
+        }
+
+        /// <summary>
+        /// Calculates note timing for each tile in the level (new implementation synced with the game's entryTime)
+        /// 计算关卡中每个瓦片的音符时间（与游戏 entryTime 同步的新实现）
+        /// </summary>
+        /// <param name="addOffset">Whether to add the level settings offset to the times (default: false) / 是否将关卡设置中的偏移添加到时间中（默认：false）</param>
+        /// <returns>List of note times in milliseconds / 以毫秒为单位的音符时间列表</returns>
+        /// <remarks>
+        /// Synced with scrLevelMaker.CalculateFloorEntryTimes: index i = floor i's entryTime,
+        /// where entry 0 is always 0 and countdown is NOT included.
+        /// 与游戏 CalculateFloorEntryTimes 同步：下标 i 为方块 i 的 entryTime，
+        /// 第 0 项恒为 0（开始标记），不含倒计时。
+        /// </remarks>
+        public List<(double,bool)> GetNoteTimesNew(bool addOffset = false)
+        {
+            CheckCache(level);
+            if (noteTimesCacheNew.Count > 0 && !addOffset) return noteTimesCacheNew;
+            if (noteTimesCacheNewWithOffset.Count > 0 && addOffset) return noteTimesCacheNewWithOffset;
+            var floors = FloorTimingCalculator.Calculate(level);
+            noteTimesCacheNew = floors.Select(f => (f.EntryTime * 1000.0, f.HoldLength >= 0)).ToList();
+            if (addOffset)
+            {
+                noteTimesCacheNewWithOffset = noteTimesCacheNew
+                    .Select(t => (t.Item1 + level.GetSetting<int>("offset"), t.Item2)).ToList();
+                return noteTimesCacheNewWithOffset;
+            }
+
+            return noteTimesCacheNew;
         }
 
         /// <summary>

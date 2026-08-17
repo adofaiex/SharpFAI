@@ -3,6 +3,10 @@ using SharpFAI.Serialization;
 
 namespace SharpFAI.Events;
 
+/// <summary>
+/// 暂停事件
+/// Pause event
+/// </summary>
 public class Pause : BaseEvent
 {
     /// <summary>
@@ -26,6 +30,13 @@ public class Pause : BaseEvent
     [JsonProperty("angleCorrectionDir")]
     public EventEnums.AngleCorrectionDirection AngleCorrectionDir;
     
+    /// <summary>
+    /// 初始化一个暂停事件
+    /// Initializes a new Pause event
+    /// </summary>
+    /// <param name="duration">暂停时长 / Pause duration</param>
+    /// <param name="countdownTicks">倒计时刻度 / Countdown ticks</param>
+    /// <param name="angleCorrectionDir">角度修正方向 / Angle correction direction</param>
     public Pause(double duration = 1,
         int countdownTicks = 0, 
         EventEnums.AngleCorrectionDirection angleCorrectionDir = EventEnums.AngleCorrectionDirection.Backward)

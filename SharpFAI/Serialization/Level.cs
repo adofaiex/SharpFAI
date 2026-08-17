@@ -20,41 +20,28 @@ namespace SharpFAI.Serialization
         /// 表示关卡数据的 JSON 对象
         /// JSON object representing level data
         /// </summary>
-        public JObject root
-        {
-            get
-            {
-                _root["actions"] = actions;
-                _root["angleData"] = angleData;
-                _root["settings"] = settings;
-                if (decorations != null)
-                {
-                    _root["decorations"] = decorations;
-                }
-                return _root;
-            }
-        }
-        
+        public JObject root => _root;
+
         private readonly JObject _root;
-        
+
         /// <summary>
         /// 表示关卡设置的 JSON 对象
         /// JSON object representing level settings
         /// </summary>
         private JObject settings{ get; }
-        
+
         /// <summary>
         /// 表示关卡砖块角度的 JSON 数组
         /// JSON array representing the angle of level tiles
         /// </summary>
         public JArray angleData{ get; private set; }
-        
+
         /// <summary>
         /// 表示所有关卡事件的 JSON 数组
         /// JSON array representing level actions
         /// </summary>
         public JArray actions{ get; }
-        
+
         /// <summary>
         /// 表示所有关卡装饰的 JSON 数组
         /// JSON array representing level decorations
@@ -88,24 +75,30 @@ namespace SharpFAI.Serialization
         {
             _root = JObject.Parse(
                 JsonConvert.SerializeObject(levelInfo));
-            actions = _root["actions"].ToObject<JArray>();
+            actions = (JArray)_root["actions"];
             if (_root.ContainsKey("angleData"))
             {
-                angleData = _root["angleData"].ToObject<JArray>();
+                angleData = (JArray)_root["angleData"];
                 angles = angleData.ToObject<List<double>>().AsReadOnly();
-            } 
+            }
             else if (_root.ContainsKey("pathData"))
             {
                 InitAngleData();
             }
-            settings = _root["settings"].ToObject<JObject>();
+            settings = (JObject)_root["settings"];
             if (settings["version"].Value<int>() > 10)
             {
-                decorations = _root["decorations"].ToObject<JArray>();
+                decorations = (JArray)_root["decorations"];
             }
             deserializedEvents = DeserializeEvents();
         }
         
+        /// <summary>
+        /// 判断两个关卡是否相等（有路径时比较路径，否则深度比较内容）
+        /// Determines whether two levels are equal (compares paths when available, otherwise deep-compares content)
+        /// </summary>
+        /// <param name="a">左操作数 / Left operand</param>
+        /// <param name="b">右操作数 / Right operand</param>
         public static bool operator ==(Level a, Level b)
         {
             // 处理两个对象都为 null 的情况
@@ -123,6 +116,12 @@ namespace SharpFAI.Serialization
                    JToken.DeepEquals(a.actions, b.actions);
         }
         
+        /// <summary>
+        /// 判断两个关卡是否不相等
+        /// Determines whether two levels are not equal
+        /// </summary>
+        /// <param name="a">左操作数 / Left operand</param>
+        /// <param name="b">右操作数 / Right operand</param>
         public static bool operator !=(Level a, Level b)
         {
             return !(a == b);
@@ -134,7 +133,7 @@ namespace SharpFAI.Serialization
         /// <param name="pathToLevel">关卡文件路径 / Path to the level file</param>
         public static implicit operator Level(string pathToLevel)
         { 
-            return new Level(SimpleJSON.DeserializeFile(pathToLevel));
+            return new Level(pathToLevel);
         }
         
         /// <summary>
@@ -279,7 +278,6 @@ namespace SharpFAI.Serialization
                 }
             }
             actions.Add(newEvent);
-            _root["actions"] = actions;
         }
 
         /// <summary>
@@ -304,7 +302,6 @@ namespace SharpFAI.Serialization
             {
                 settings.Remove(setting);
             }
-            _root["settings"] = settings;
         }
 
         /// <summary>
@@ -373,7 +370,6 @@ namespace SharpFAI.Serialization
                     i--;
                 }
             }
-            _root["actions"] = actions;
             if (decorations == null) return;
             for (int i = 0; i < decorations.Count; i++)
             {
@@ -384,7 +380,6 @@ namespace SharpFAI.Serialization
                     i--;
                 }
             }
-            _root["decorations"] = decorations;
         }
 
         /// <summary>
@@ -415,7 +410,6 @@ namespace SharpFAI.Serialization
                     actions.Remove(action);
                 if (++eventsRemoved == count) break;
             }
-            _root["actions"] = actions;
         }
 
         /// <summary>
@@ -471,7 +465,6 @@ namespace SharpFAI.Serialization
                 }
             }
             decorations.Add(newDecoration);
-            _root["decorations"] = decorations;
         }
 
         /// <summary>
@@ -482,6 +475,7 @@ namespace SharpFAI.Serialization
         /// <param name="indent">Whether to format with indentation (default: true) / 是否使用缩进格式化（默认：true）</param>
         public void Save(string? newLevelPath = null, bool indent = true)
         {
+            Console.WriteLine(pathToLevel);
             if (newLevelPath == null && pathToLevel != null)
             {
                 newLevelPath = Path.Combine(Path.GetDirectoryName(pathToLevel),"level-modified.adofai");
@@ -501,19 +495,8 @@ namespace SharpFAI.Serialization
         /// <returns>JSON string representation of the level / 关卡的JSON字符串表示</returns>
         public string ToString(bool indent = true)
         {
-            _root["actions"] = actions;
-            _root["angleData"] = angleData;
-            _root["settings"] = settings;
-            if (decorations != null)
-            {
-                _root["decorations"] = decorations;
-            }
             JsonSerializerSettings serializerSettings = new JsonSerializerSettings();
-            serializerSettings.Formatting = Formatting.Indented;
-            if (!indent)
-            {
-                serializerSettings.Formatting = Formatting.None;
-            }
+            serializerSettings.Formatting = indent ? Formatting.Indented : Formatting.None;
             return JsonConvert.SerializeObject(_root, serializerSettings);
         }
 
@@ -584,7 +567,7 @@ namespace SharpFAI.Serialization
         /// <returns>Read-only list of events in the same order as actions (and decorations if included); returns empty list when none / 只读的事件列表，顺序与 actions（以及包含时的 decorations）一致；若无事件返回空列表而非 null</returns>
         public ReadOnlyCollection<BaseEvent> DeserializeEvents(bool includeDecorations = false)
         {
-            if (deserializedEvents == null)
+            if (deserializedEvents == null || deserializedEvents.Count != actions.Count)
             {
                 List<BaseEvent> baseEvents = [];
                 baseEvents.AddRange(JsonConvert.DeserializeObject<BaseEvent[]>(actions.ToString(), EventJsonConverter.GetJsonSettings()));
