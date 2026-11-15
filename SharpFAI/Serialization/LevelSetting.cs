@@ -8,7 +8,11 @@ public sealed class LevelSetting : JObject
 {
     public LevelSetting(string item1, object item2) 
     {
-        Add(item1, FromObject(item2));
+        // `Add(name, JToken)` is what is wanted here: `FromObject` returns a JValue for scalars and a
+        // JArray for collections, and the overload taking (string, JToken) stores either correctly.
+        // The (string, JObject) overload resolves for some of the preset values and throws for the
+        // rest, which is why this is not written as `Add(item1, FromObject(item2))`.
+        this[item1] = JToken.FromObject(item2);
     }
 
     /// <summary>
