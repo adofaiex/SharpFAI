@@ -50,7 +50,7 @@ public class TestMidspinEvents
     public void TestMidspinBaseline()
     {
         var level = MakeLevel(0, 999, 180, 0, 0);
-        AssertTimes(level.GetNoteTimesNew(), [0, 600, 600, 1200, 2400, 3000], "基准");
+        AssertTimes(level.GetNoteTimesNew(), [0, 2400, 2400, 3000, 4200, 4800], "基准");
     }
 
     /// <summary>
@@ -68,7 +68,7 @@ public class TestMidspinEvents
             SpeedType = EventEnums.SpeedType.Multiplier,
             BpmMultiplier = 2
         });
-        AssertTimes(level.GetNoteTimesNew(), [0, 600, 600, 900, 1500, 1800], "中旋变速");
+        AssertTimes(level.GetNoteTimesNew(), [0, 2400, 2400, 2700, 3300, 3600], "中旋变速");
     }
 
     /// <summary>
@@ -85,7 +85,7 @@ public class TestMidspinEvents
             SpeedType = EventEnums.SpeedType.Bpm,
             BeatsPerMinute = 200
         });
-        AssertTimes(level.GetNoteTimesNew(), [0, 600, 600, 900, 1500, 1800], "中旋Bpm变速");
+        AssertTimes(level.GetNoteTimesNew(), [0, 2400, 2400, 2700, 3300, 3600], "中旋Bpm变速");
     }
 
     /// <summary>
@@ -98,11 +98,11 @@ public class TestMidspinEvents
     public void TestTwirlOnMidspin()
     {
         var level = MakeLevel(0, 999, 90, 0);
-        AssertTimes(level.GetNoteTimesNew(), [0, 600, 600, 1500, 2400], "无Twirl对照");
+        AssertTimes(level.GetNoteTimesNew(), [0, 2400, 2400, 3300, 4200], "无Twirl对照");
 
         level = MakeLevel(0, 999, 90, 0);
         level.AddEvent(new Twirl { Floor = 1 });
-        AssertTimes(level.GetNoteTimesNew(), [0, 600, 600, 900, 1200], "中旋Twirl");
+        AssertTimes(level.GetNoteTimesNew(), [0, 2400, 2400, 2700, 3000], "中旋Twirl");
     }
 
     /// <summary>
@@ -117,7 +117,7 @@ public class TestMidspinEvents
         level.AddEvent(new Hold { Floor = 1, Duration = 1 });
 
         var times = level.GetNoteTimesNew();
-        AssertTimes(times, [0, 600, 1800, 2400, 3600, 4200], "中旋Hold");
+        AssertTimes(times, [0, 2400, 3600, 4200, 5400, 6000], "中旋Hold");
         Assert.That(times[1].Item2, Is.True, "中旋 f1 应有 hold 标记");
     }
 
@@ -129,7 +129,7 @@ public class TestMidspinEvents
     public void TestConsecutiveMidspins()
     {
         var level = MakeLevel(0, 999, 999, 180, 0);
-        AssertTimes(level.GetNoteTimesNew(), [0, 600, 600, 600, 1800, 3000], "连续中旋");
+        AssertTimes(level.GetNoteTimesNew(), [0, 2400, 2400, 2400, 3600, 4800], "连续中旋");
     }
 
     /// <summary>
@@ -142,7 +142,7 @@ public class TestMidspinEvents
     {
         var level = MakeLevel(0, 999, 180);
         level.AddEvent(new MultiPlanet { Floor = 2, Planets = EventEnums.PlanetCount.ThreePlanets });
-        AssertTimes(level.GetNoteTimesNew(), [0, 600, 600, 1200], "中旋后多行星");
+        AssertTimes(level.GetNoteTimesNew(), [0, 2400, 2400, 3000], "中旋后多行星");
     }
 
     /// <summary>
@@ -155,14 +155,14 @@ public class TestMidspinEvents
     {
         var level = MakeLevel(0, 999, 90, 0);
         level.AddEvent(new Twirl { Floor = 0 });
-        AssertTimes(level.GetNoteTimesNew(), [0, 600, 600, 900, 1200], "中旋前Twirl");
+        AssertTimes(level.GetNoteTimesNew(), [0, 2400, 2400, 2700, 3000], "中旋前Twirl");
     }
 
     /// <summary>
     /// [0, 0] + SetSpeed Mult2 angleOffset=90 在 f1 上（普通块的途中分段变速）
     /// 游戏: num43=180, num46 = 90°@1x(0.3s) + 90°@2x(0.15s) = 0.45s
     /// flag13=true → f1.speed = 60/0.45·(180/180)/100 = 4/3 → f1 行程 = 0.45s
-    /// → [0, 600, 1050]
+    /// → [0, 2400, 2850]
     /// </summary>
     [Test]
     public void TestAngleOffsetSetSpeedNormalFloor()
@@ -175,14 +175,14 @@ public class TestMidspinEvents
             BpmMultiplier = 2,
             AngleOffset = 90
         });
-        AssertTimes(level.GetNoteTimesNew(), [0, 600, 1050], "普通块angleOffset变速");
+        AssertTimes(level.GetNoteTimesNew(), [0, 2400, 2850], "普通块angleOffset变速");
     }
 
     /// <summary>
     /// [0, 999, 180, 0] + SetSpeed Mult2 angleOffset=90 在中旋 f1 上
     /// 游戏: 中旋 entry==exit → num43=360, num52=true → flag13 → f1.speed=speed2（中旋行程0无影响）
     /// 后续速度 = num38 = 2: f2=180°@2x=0.3s, f3=回头2拍@2x=0.6s
-    /// → [0, 600, 600, 900, 1500]
+    /// → [0, 2400, 2400, 2700, 3300]
     /// </summary>
     [Test]
     public void TestAngleOffsetSetSpeedOnMidspin()
@@ -195,6 +195,6 @@ public class TestMidspinEvents
             BpmMultiplier = 2,
             AngleOffset = 90
         });
-        AssertTimes(level.GetNoteTimesNew(), [0, 600, 600, 900, 1500], "中旋angleOffset变速");
+        AssertTimes(level.GetNoteTimesNew(), [0, 2400, 2400, 2700, 3300], "中旋angleOffset变速");
     }
 }

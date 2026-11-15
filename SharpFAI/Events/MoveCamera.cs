@@ -92,14 +92,14 @@ public class MoveCamera : BaseEvent
         EventType = EventType.MoveCamera;
         Duration = duration;
         RelativeTo = relativeTo;
-        if (position != null)
-        {
-            Position = [position[0], position[1]];
-        }
-        else
-        {
-            Position = [0,0];
-        }
+        // 关卡里存在 "position": [null, null]，表示该轴沿用默认值，不能当作坐标读取
+        // Charts contain "position": [null, null] to mean "keep the default", so the values are
+        // checked before they are used as coordinates.
+        Position =
+        [
+            position is { Length: > 0 } && position[0] is not null ? position[0] : 0,
+            position is { Length: > 1 } && position[1] is not null ? position[1] : 0,
+        ];
         Rotation = rotation;
         Zoom = zoom;
         AngleOffset = angleOffset;

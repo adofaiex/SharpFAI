@@ -4,6 +4,26 @@ ADOFAI Level Parse Library - A C# library for parsing and manipulating ADOFAI (A
 
 ADOFAI关卡解析库 - 用于解析和操作ADOFAI（冰与火之舞）关卡文件的C#库。
 
+## Building / 构建
+
+`Thrust` 是 git 子模块，克隆后需要先初始化：
+
+```bash
+git clone --recurse-submodules https://github.com/adofaiex/SharpFAI.git
+# 或者已经克隆过的话
+git submodule update --init --recursive
+dotnet build SharpFAI.slnx
+```
+
+`Thrust` is a git submodule, so initialise it after cloning:
+
+```bash
+git clone --recurse-submodules https://github.com/adofaiex/SharpFAI.git
+# or, in an existing clone
+git submodule update --init --recursive
+dotnet build SharpFAI.slnx
+```
+
 ## Features / 功能特性
 
 - Parse ADOFAI level files (.adofai) / 解析ADOFAI关卡文件(.adofai)

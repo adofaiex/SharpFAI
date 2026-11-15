@@ -61,10 +61,31 @@ namespace SharpFAI.Serialization
         public string? pathToLevel { get; }
 
         /// <summary>
-        /// 反序列化后的所有事件
-        /// All events after deserialization
+        /// 反序列化后的所有事件。首次访问时才绑定，因为解析一个 40 MB 的谱面要几秒钟，
+        /// 而只做分析的调用方（例如渲染器）根本不需要这些强类型对象。
+        /// All events after deserialization. Bound on first access: parsing a 40 MB chart costs
+        /// seconds, and analysis-only callers never need the strongly typed objects.
         /// </summary>
-        public ReadOnlyCollection<BaseEvent>? deserializedEvents { get; private set; }
+        public ReadOnlyCollection<BaseEvent>? deserializedEvents
+        {
+            get
+            {
+                if (_deserializedEvents == null)
+                {
+                    _deserializedEvents = DeserializeEvents();
+                }
+
+                return _deserializedEvents;
+            }
+            private set => _deserializedEvents = value;
+        }
+
+        private ReadOnlyCollection<BaseEvent>? _deserializedEvents;
+
+        /// <summary>
+        /// 是否已经绑定过事件 / Whether the event objects have been materialised.
+        /// </summary>
+        public bool EventsDeserialized => _deserializedEvents != null;
         
         /// <summary>
         /// 通过关卡信息字典初始化 Level 类的新实例
@@ -73,24 +94,51 @@ namespace SharpFAI.Serialization
         /// <param name="levelInfo">表示关卡信息的字典 / Dictionary representing level information</param>
         public Level(Dictionary<string, object>? levelInfo)
         {
-            _root = JObject.Parse(
-                JsonConvert.SerializeObject(levelInfo));
-            actions = (JArray)_root["actions"];
+            _root = levelInfo is null ? new JObject() : JsonValueConverter.ToJObject(levelInfo);
+
+            actions = _root["actions"] as JArray ?? [];
+            InitAngleDataIfNeeded();
+            settings = _root["settings"] as JObject ?? new JObject();
+
+            if (settings["version"]?.Value<int>() > 10)
+            {
+                decorations = _root["decorations"] as JArray;
+            }
+
+        }
+
+        /// <summary>
+        /// Initialise from an already parsed token tree. The file constructor uses this so the
+        /// document is only ever materialised once.
+        /// </summary>
+        private Level(JObject root, string? pathToLevel)
+        {
+            _root = root;
+            this.pathToLevel = pathToLevel;
+
+            actions = _root["actions"] as JArray ?? [];
+            InitAngleDataIfNeeded();
+            settings = _root["settings"] as JObject ?? new JObject();
+
+            if (settings["version"]?.Value<int>() > 10)
+            {
+                decorations = _root["decorations"] as JArray;
+            }
+
+        }
+
+        /// <summary>Populate the angle view from whichever representation the level carries.</summary>
+        private void InitAngleDataIfNeeded()
+        {
             if (_root.ContainsKey("angleData"))
             {
-                angleData = (JArray)_root["angleData"];
-                angles = angleData.ToObject<List<double>>().AsReadOnly();
+                angleData = (JArray)_root["angleData"]!;
+                angles = angleData.ToObject<List<double>>()!.AsReadOnly();
             }
             else if (_root.ContainsKey("pathData"))
             {
                 InitAngleData();
             }
-            settings = (JObject)_root["settings"];
-            if (settings["version"].Value<int>() > 10)
-            {
-                decorations = (JArray)_root["decorations"];
-            }
-            deserializedEvents = DeserializeEvents();
         }
         
         /// <summary>
@@ -151,9 +199,9 @@ namespace SharpFAI.Serialization
         /// Initializes a new instance of the Level class by loading from a file path
         /// </summary>
         /// <param name="pathToLevel">关卡文件路径 / Path to the level file</param>
-        public Level(string? pathToLevel) : this(SimpleJSON.DeserializeFile(pathToLevel))
+        public Level(string? pathToLevel)
+            : this(SimpleJSON.DeserializeTokenFile(pathToLevel!), pathToLevel)
         {
-            this.pathToLevel = pathToLevel;
         }
 
         /// <summary>
@@ -162,25 +210,37 @@ namespace SharpFAI.Serialization
         /// </summary>
         /// <param name="savePath">保存新关卡的路径（可选）/ Path to save the new level to (optional)</param>
         /// <returns>新的 Level 实例 / A new Level instance</returns>
+        /// <remarks>
+        /// The settings block comes from <see cref="PresetSettings.DefaultSettings"/>, which mirrors the
+        /// full v15 field set with the game's own defaults. Writing the complete block means the level
+        /// behaves identically in-game and in any tool that reads a field this library never touches.
+        /// </remarks>
         public static Level CreateNewLevel(string? savePath = null)
         {
-            JObject root = new();
-            root["angleData"] = new JArray([0,0,0,0,0,0,0,0,0,0]);
-            root["settings"] = JObject.FromObject(new
+            JObject settings = new();
+
+            foreach (LevelSetting preset in PresetSettings.DefaultSettings)
             {
-                version = 14,
-                author = "Created Level by SharpFAI",
-                bpm = 100,
-                offset = 0,
-                pitch = 100
-            });
-            root["actions"] = new JArray();
-            root["decorations"] = new JArray();
+                foreach (JProperty property in preset.Properties())
+                {
+                    settings[property.Name] = property.Value;
+                }
+            }
+
+            JObject root = new()
+            {
+                ["angleData"] = new JArray([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+                ["settings"] = settings,
+                ["actions"] = new JArray(),
+                ["decorations"] = new JArray(),
+            };
+
             if (savePath != null)
             {
                 File.WriteAllText(savePath, root.ToString());
             }
-            return new(JsonConvert.DeserializeObject<Dictionary<string,object>>(root.ToString()));
+
+            return new Level(root, savePath);
         }
 
         /// <summary>
@@ -567,18 +627,46 @@ namespace SharpFAI.Serialization
         /// <returns>Read-only list of events in the same order as actions (and decorations if included); returns empty list when none / 只读的事件列表，顺序与 actions（以及包含时的 decorations）一致；若无事件返回空列表而非 null</returns>
         public ReadOnlyCollection<BaseEvent> DeserializeEvents(bool includeDecorations = false)
         {
-            if (deserializedEvents == null || deserializedEvents.Count != actions.Count)
+            if (_deserializedEvents == null || _deserializedEvents.Count != actions.Count)
             {
                 List<BaseEvent> baseEvents = [];
-                baseEvents.AddRange(JsonConvert.DeserializeObject<BaseEvent[]>(actions.ToString(), EventJsonConverter.GetJsonSettings()));
+
+                // Deserialize straight from the token: serialising the array back to text first would
+                // materialise a 34 MB string for a large chart and then parse it all over again.
+                baseEvents.AddRange(ReadEvents(actions));
+
                 if (includeDecorations && decorations != null)
                 {
-                    baseEvents.AddRange(JsonConvert.DeserializeObject<BaseEvent[]>(decorations.ToString(), EventJsonConverter.GetJsonSettings()));
+                    baseEvents.AddRange(ReadEvents(decorations));
                 }
 
-                deserializedEvents = baseEvents.AsReadOnly();
+                _deserializedEvents = baseEvents.AsReadOnly();
             }
-            return deserializedEvents; 
+
+            return _deserializedEvents;
+        }
+
+        private static List<BaseEvent> ReadEvents(JToken token)
+        {
+            List<BaseEvent> result = [];
+
+            using JsonReader reader = token.CreateReader();
+            JsonSerializer serializer = JsonSerializer.Create(EventJsonConverter.GetJsonSettings());
+
+            while (reader.Read())
+            {
+                if (reader.TokenType != JsonToken.StartObject)
+                {
+                    continue;
+                }
+
+                if (serializer.Deserialize<BaseEvent>(reader) is { } item)
+                {
+                    result.Add(item);
+                }
+            }
+
+            return result;
         }
 
         /// <summary>

@@ -10,6 +10,12 @@ public sealed class LevelSetting : JObject
     {
         Add(item1, FromObject(item2));
     }
+
+    /// <summary>
+    /// 该预设项的名称（唯一一个属性名）。
+    /// The preset's key, i.e. its only property name.
+    /// </summary>
+    public string Key => ((JProperty)First!).Name;
 }
 
 public static class PresetSettings
@@ -132,4 +138,42 @@ public static class PresetSettings
         DefaultTextShadowColor, CongratsText, PerfectText, LegacyFlash,
         LegacyCamRelativeTo, LegacySpriteTiles, LegacyTween, DisableV15Features
     ];
+
+    /// <summary>
+    /// 把一组预设写入目标 <see cref="JObject"/>；已存在的键会被覆盖。
+    /// Copy a set of presets into a target settings object, overwriting keys that already exist.
+    /// </summary>
+    /// <param name="target">接收设置的对象 / Settings object to write into.</param>
+    /// <param name="presets">要写入的预设 / Presets to apply.</param>
+    /// <returns><paramref name="target"/>，便于链式调用 / The same instance, for chaining.</returns>
+    public static JObject Apply(JObject target, params LevelSetting[] presets)
+    {
+        if (target is null)
+        {
+            throw new ArgumentNullException(nameof(target));
+        }
+
+        if (presets is null)
+        {
+            throw new ArgumentNullException(nameof(presets));
+        }
+
+        foreach (LevelSetting preset in presets)
+        {
+            foreach (JProperty property in preset.Properties())
+            {
+                target[property.Name] = property.Value;
+            }
+        }
+
+        return target;
+    }
+
+    /// <summary>
+    /// 把全部默认预设写入目标 <see cref="JObject"/>。
+    /// Copy every default preset into a target settings object.
+    /// </summary>
+    /// <param name="target">接收设置的对象 / Settings object to write into.</param>
+    /// <returns><paramref name="target"/>，便于链式调用 / The same instance, for chaining.</returns>
+    public static JObject ApplyDefaults(JObject target) => Apply(target, [.. DefaultSettings]);
 }

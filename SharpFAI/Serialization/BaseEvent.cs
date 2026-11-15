@@ -53,8 +53,21 @@ public class BaseEvent
     {
         if (EventType.ToString() == typeof(T).Name)
         {
-            return JsonConvert.DeserializeObject<T>(ToString());
+            // Go through the token tree instead of a JSON string: serialising and re-parsing the
+            // event costs two full conversions for what is a simple type change.
+            return (T)JsonValueConverter.ToToken(this).ToObject(typeof(T), NestedSerializer)!;
         }
         throw new InvalidCastException("Unknow event type: " + EventType);
     }
+
+    /// <summary>Serializer reused when converting an event to its concrete type.</summary>
+    private static readonly JsonSerializer NestedSerializer = JsonSerializer.Create(new JsonSerializerSettings
+    {
+        NullValueHandling = NullValueHandling.Include,
+        DefaultValueHandling = DefaultValueHandling.Include,
+        Converters =
+        {
+            new Newtonsoft.Json.Converters.StringEnumConverter(),
+        },
+    });
 }

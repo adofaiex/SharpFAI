@@ -11,9 +11,9 @@ namespace SharpFAI.Tests;
 public class TestGetNoteTimesNew
 {
     /// <summary>
-    /// 默认关卡（10 个 angle 0、bpm 100、无事件），不含倒计时
-    /// 每块行程 180° = 0.6s
-    /// entryTime(ms) = [0, 600, 1200, ..., 6000]
+    /// 默认关卡（10 个 angle 0、bpm 100）带官方默认倒计时 countdownTicks = 4，
+    /// 所以第 1 块在 (4-1) 拍倒计时 + 180° 行程之后，即 1800 + 600 = 2400 ms。
+    /// 之后每块行程 180° = 600 ms。
     /// </summary>
     [Test]
     public void TestDefaultLevel()
@@ -23,7 +23,8 @@ public class TestGetNoteTimesNew
 
         Assert.That(times.Count, Is.EqualTo(11), "应有 angleData.Count + 1 = 11 个方块时间");
 
-        double[] expected = { 0, 600, 1200, 1800, 2400, 3000, 3600, 4200, 4800, 5400, 6000 };
+        // scrLevelMaker.CalculateFloorEntryTimes: countdownTicks - 1 beats of lead-in, then travel
+        double[] expected = { 0, 2400, 3000, 3600, 4200, 4800, 5400, 6000, 6600, 7200, 7800 };
         for (int i = 0; i < expected.Length; i++)
         {
             Assert.That(times[i].Item1, Is.EqualTo(expected[i]).Within(0.001),
@@ -33,8 +34,8 @@ public class TestGetNoteTimesNew
     }
 
     /// <summary>
-    /// 在方块 2 添加 SetSpeed Multiplier 2，方块 2 及之后速度为 2，行程时间减半
-    /// entryTime(ms) = [0, 600, 1200, 1500, 1800, 2100, 2400, 2700, 3000, 3300, 3600]
+    /// 在方块 2 添加 SetSpeed Multiplier 2，方块 2 及之后速度为 2，行程时间减半。
+    /// 前两块各 600 ms，倒计时 3 拍 = 1800 ms，之后每块 300 ms。
     /// </summary>
     [Test]
     public void TestSetSpeedMultiplier()
@@ -49,7 +50,7 @@ public class TestGetNoteTimesNew
 
         var times = level.GetNoteTimesNew();
 
-        double[] expected = { 0, 600, 1200, 1500, 1800, 2100, 2400, 2700, 3000, 3300, 3600 };
+        double[] expected = { 0, 2400, 3000, 3300, 3600, 3900, 4200, 4500, 4800, 5100, 5400 };
         for (int i = 0; i < expected.Length; i++)
         {
             Assert.That(times[i].Item1, Is.EqualTo(expected[i]).Within(0.001),
@@ -93,8 +94,9 @@ public class TestGetNoteTimesNew
         Assert.That(times[0].Item2, Is.False, "方块 0 不应有 hold 标记");
 
         // 方块 1 的 hold=1 → 行程增加 2 拍 = 1.2s
-        // entryTime[1] = 600, entryTime[2] = 600 + 600(travel floor1) + 1200(hold) = 2400
-        Assert.That(times[2].Item1, Is.EqualTo(2400).Within(0.001),
+        // entryTime[1] = 2400（倒计时 3 拍 + 首块行程）
+        // entryTime[2] = 2400 + 600(floor1 行程) + 1200(hold) = 4200
+        Assert.That(times[2].Item1, Is.EqualTo(4200).Within(0.001),
             "Hold duration=1 应使到达下一方块的时间增加 2 拍 (1200 ms)");
     }
 
@@ -109,8 +111,9 @@ public class TestGetNoteTimesNew
 
         Assert.That(floors.Count, Is.EqualTo(11), "应有 11 个 FloorData");
         Assert.That(floors[0].EntryTime, Is.EqualTo(0).Within(1e-9), "方块 0 的 entryTime 应为 0");
-        // 游戏源码使用 float 精度常量（如 4.712389f 与 float π），结果与理想值有 ~2e-8 秒偏差，此处保持一致
-        Assert.That(floors[1].EntryTime, Is.EqualTo(0.6).Within(1e-6), "方块 1 的 entryTime 应为 0.6 秒");
+        // 游戏源码 scrLevelMaker.CalculateFloorEntryTimes：第 1 块 = (countdownTicks-1) 拍 + 首块行程
+        // float 精度常量（如 4.712389f）使结果与理想值有 ~2e-8 秒偏差，此处保持一致
+        Assert.That(floors[1].EntryTime, Is.EqualTo(2.4).Within(1e-6), "方块 1 的 entryTime 应为 2.4 秒");
         Assert.That(floors[0].EntryAngle, Is.EqualTo(4.71238899230957).Within(1e-9), "方块 0 的 entryAngle 应为 3π/2");
     }
 }

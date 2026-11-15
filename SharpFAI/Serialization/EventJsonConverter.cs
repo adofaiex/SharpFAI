@@ -115,39 +115,90 @@ public class EventJsonConverter : JsonConverter<BaseEvent>
                 EventType = EventType.None
             };
 
-        var jsonObject = JObject.Load(reader);
+        // The concrete class is chosen by eventType, so the object has to be inspected before it is
+        // bound. Loading it as a token keeps the reader positioned correctly; the token is then
+        // handed to the concrete type's serializer, which skips the intermediate text completely.
+        JObject jsonObject = ReadObject(reader);
 
-        // 获取事件类型
-        var eventTypeToken = jsonObject["eventType"];
-        if (eventTypeToken == null)
-            throw new JsonSerializationException("Missing 'eventType' property in JSON");
+        var eventTypeToken = jsonObject["eventType"]
+            ?? throw new JsonSerializationException("Missing 'eventType' property in JSON");
 
-        var eventTypeString = eventTypeToken.ToString();
-        
-        // 根据事件类型创建相应的实例
+        string eventTypeString = eventTypeToken.ToString();
+
         if (!EventTypeMap.TryGetValue(eventTypeString, out var targetType))
         {
-            // 对于未知事件类型，创建UnknownEvent实例
             targetType = typeof(Unknown);
         }
 
-        // 使用默认序列化器反序列化到具体类型
-        var settings = new JsonSerializerSettings();
-        // 枚举序列化为名字，不允许整数形式
-        settings.Converters.Add(new StringEnumConverter());
-        // 支持 Enabled/Disabled -> bool
-        settings.Converters.Add(new StringBooleanConverter());
-        
-        var eventInstance = (BaseEvent)jsonObject.ToObject(targetType, JsonSerializer.Create(settings));
-        // 如果是未知事件类型，保存原始事件类型信息
+        var eventInstance = (BaseEvent)jsonObject.ToObject(targetType, NestedSerializer)!;
+
         if (eventInstance is Unknown unknownEvent && !EventTypeMap.ContainsKey(eventTypeString))
         {
             Enum.TryParse<EventType>(eventTypeString, out var eventType);
             unknownEvent.EventType = eventType;
         }
-        
+
         return eventInstance;
-  
+    }
+
+    /// <summary>
+    /// Materialise one event object from the reader. <see cref="JObject.Load(JsonReader)"/> would
+    /// clone through the reader's own token stream; creating the object directly and filling it keeps
+    /// the same shape with one fewer copy.
+    /// </summary>
+    private static JObject ReadObject(JsonReader reader)
+    {
+        JObject result = new();
+
+        if (!reader.Read())
+        {
+            return result;
+        }
+
+        while (reader.TokenType != JsonToken.EndObject)
+        {
+            if (reader.TokenType != JsonToken.PropertyName)
+            {
+                if (!reader.Read())
+                {
+                    break;
+                }
+
+                continue;
+            }
+
+            string property = (string)reader.Value!;
+
+            if (!reader.Read())
+            {
+                break;
+            }
+
+            result[property] = JToken.ReadFrom(reader);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// 供嵌套反序列化复用的序列化器。事件对象里的枚举与 bool 需要同样的宽松处理，但每读一个
+    /// 事件都新建一份设置与转换器会把 10 万级事件的开销放大成秒级。
+    /// Serializer reused for the nested deserialization of each concrete event type. The lookups
+    /// need the same lenient enum/bool handling, but rebuilding the settings and converters per
+    /// event turns a 100k-event chart into seconds of pure allocation.
+    /// </summary>
+    private static readonly JsonSerializer NestedSerializer = CreateNestedSerializer();
+
+    private static JsonSerializer CreateNestedSerializer()
+    {
+        var settings = new JsonSerializerSettings
+        {
+            NullValueHandling = NullValueHandling.Include,
+            DefaultValueHandling = DefaultValueHandling.Include
+        };
+        settings.Converters.Add(new StringEnumConverter());
+        settings.Converters.Add(new StringBooleanConverter());
+        return JsonSerializer.Create(settings);
     }
 
     /// <summary>
@@ -164,6 +215,16 @@ public class EventJsonConverter : JsonConverter<BaseEvent>
     /// Get unified JSON settings (string enum + event converter)
     /// </summary>
     public static JsonSerializerSettings GetJsonSettings()
+    {
+        // 设置与转换器都是无状态的，建一次即可；每次新建会让大关卡的反序列化多出可观的分配。
+        // The settings and converters are stateless, so one instance is enough; rebuilding them on
+        // every call adds measurable allocation when a chart has over a hundred thousand events.
+        return SharedSettings;
+    }
+
+    private static readonly JsonSerializerSettings SharedSettings = CreateSharedSettings();
+
+    private static JsonSerializerSettings CreateSharedSettings()
     {
         var settings = new JsonSerializerSettings
         {

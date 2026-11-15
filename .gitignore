@@ -7,4 +7,15 @@ packages
 *.nupkg
 .idea
 .codebuddy
-SharpFAI-Player
+*.log
+publish
+
+# Thrust 与 Editor 各自是独立仓库 / Thrust and Editor are separate repositories
+SharpFAI.Editor/
+Thrust/
+
+backup/
+
+
+AGENTS.md
+

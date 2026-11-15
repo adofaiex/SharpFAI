@@ -267,14 +267,45 @@ public static class FloorTimingCalculator
     private static void CalculateEntryTimes(Level level, FloorData[] floors)
     {
         double bpm = level.GetSetting<double>("bpm");
+        if (bpm <= 1e-6)
+        {
+            bpm = 120.0;
+        }
 
         if (floors.Length == 1)
         {
             return;
         }
 
+        // 官方 scrLevelMaker.CalculateFloorEntryTimes：
+        //   num = crotchetAtStart * (adjustedCountdownTicks - 1) + GetTimeBetweenAngles(floor0)
+        //   listFloors[0].entryTime = 0; listFloors[1].entryTime = num;
+        // 第 1 格的 entryTime 必须包含倒计时拍数，否则整条时间轴会提前 (countdownTicks - 1) 拍。
+        // Official: floor 1's entryTime includes (adjustedCountdownTicks - 1) beats of countdown;
+        // omitting it shifts the whole timeline earlier by that many beats.
+        int countdownTicks = 4;
+        if (level.HasSetting("countdownTicks"))
+        {
+            try
+            {
+                countdownTicks = level.GetSetting<int>("countdownTicks");
+            }
+            catch (Exception)
+            {
+                countdownTicks = 4;
+            }
+        }
+
+        if (countdownTicks < 1)
+        {
+            countdownTicks = 1;
+        }
+
+        double crotchet = 60.0 / bpm;
+
         var first = floors[0];
-        double time = GetTimeBetweenAngles(first.EntryAngle, first.ExitAngle, first.Speed, bpm, !first.IsCCW);
+        double time = crotchet * (countdownTicks - 1)
+                      + GetTimeBetweenAngles(first.EntryAngle, first.ExitAngle, first.Speed, bpm, !first.IsCCW);
         floors[0].EntryTime = 0.0;
         floors[1].EntryTime = time;
 

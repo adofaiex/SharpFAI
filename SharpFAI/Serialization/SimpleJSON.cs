@@ -3,10 +3,11 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using Newtonsoft.Json.Linq;
 
 namespace SharpFAI.Serialization
 {
-    internal static class SimpleJSON
+    public static class SimpleJSON
 	{
 		private sealed class Parser : IDisposable
 		{
@@ -30,28 +31,55 @@ namespace SharpFAI.Serialization
 
 			private const string WORD_BREAK = " \t\n\r{}[],:\"";
 
-			private StringReader json;
+			// Direct index over the source text. StringReader.Peek()/Read() are virtual calls that cost
+			// more than the parse work itself on a 40 MB chart, so the parser walks the string.
+			private readonly string source;
+
+			private int position;
 
 			private string endSection;
 
-			private char PeekChar => Convert.ToChar(json.Peek());
+			private char PeekChar => (char)Peek();
 
-			private char NextChar => Convert.ToChar(json.Read());
+			private char NextChar => (char)Read();
+
+			private int Peek() => position < source.Length ? source[position] : -1;
+
+			private int Read() => position < source.Length ? source[position++] : -1;
 
 			private string NextWord
 			{
 				get
 				{
 					StringBuilder stringBuilder = new StringBuilder();
-					while (" \t\n\r{}[],:\"".IndexOf(PeekChar) == -1)
+					int peek = Peek();
+					while (peek != -1 && !IsWordBreak((char)peek))
 					{
-						stringBuilder.Append(NextChar);
-						if (json.Peek() == -1)
-						{
-							break;
-						}
+						stringBuilder.Append((char)Read());
+						peek = Peek();
 					}
 					return stringBuilder.ToString();
+				}
+			}
+
+			private static bool IsWordBreak(char c)
+			{
+				switch (c)
+				{
+				case ' ':
+				case '\t':
+				case '\n':
+				case '\r':
+				case '{':
+				case '}':
+				case '[':
+				case ']':
+				case ',':
+				case ':':
+				case '"':
+					return true;
+				default:
+					return false;
 				}
 			}
 
@@ -60,7 +88,7 @@ namespace SharpFAI.Serialization
 				get
 				{
 					EatWhitespace();
-					if (json.Peek() == -1)
+					if (Peek() == -1)
 					{
 						return TOKEN.NONE;
 					}
@@ -69,15 +97,15 @@ namespace SharpFAI.Serialization
 					case '{':
 						return TOKEN.CURLY_OPEN;
 					case '}':
-						json.Read();
+						Read();
 						return TOKEN.CURLY_CLOSE;
 					case '[':
 						return TOKEN.SQUARED_OPEN;
 					case ']':
-						json.Read();
+						Read();
 						return TOKEN.SQUARED_CLOSE;
 					case ',':
-						json.Read();
+						Read();
 						return TOKEN.COMMA;
 					case '"':
 						return TOKEN.STRING;
@@ -109,10 +137,13 @@ namespace SharpFAI.Serialization
 
 			private Parser(string jsonString)
 			{
-				json = new StringReader(jsonString);
-				if (json.Peek() == 65279)
+				source = jsonString;
+				position = 0;
+
+				// Skip the UTF-8 BOM if the text was decoded with it still attached.
+				if (source.Length > 0 && source[0] == '\uFEFF')
 				{
-					json.Read();
+					position = 1;
 				}
 			}
 
@@ -120,6 +151,164 @@ namespace SharpFAI.Serialization
 			{
 				using Parser parser = new Parser(jsonString);
 				return parser.ParseValue();
+			}
+
+			/// <summary>Parse into Newtonsoft tokens directly / 直接产成 Newtonsoft token.</summary>
+			public static JObject ParseToken(string jsonString)
+			{
+				using Parser parser = new Parser(jsonString);
+				return parser.ParseJValue() as JObject;
+			}
+
+			/// <summary>
+			/// Parse only the requested top-level members and skip everything else. Charts routinely
+			/// carry tens of megabytes of decorations that analysis never reads, so skipping them by
+			/// bracket depth removes most of the work without changing the resulting values.
+			/// </summary>
+			/// <param name="jsonString">Source text / 源文本</param>
+			/// <param name="wanted">Top-level keys to keep; null keeps everything.</param>
+			public static JObject ParseTokenSelective(string jsonString, ISet<string>? wanted)
+			{
+				using Parser parser = new Parser(jsonString);
+				return wanted is null ? parser.ParseJValue() as JObject : parser.ParseJObjectSelective(wanted);
+			}
+
+			private JObject ParseJObjectSelective(ISet<string> wanted)
+			{
+				JObject result = [];
+				Read();
+
+				while (true)
+				{
+					switch (NextToken)
+					{
+						case TOKEN.COMMA:
+							continue;
+						case TOKEN.NONE:
+							return result;
+						case TOKEN.CURLY_CLOSE:
+							return result;
+					}
+
+					string key = ParseString();
+
+					if (key is null)
+					{
+						return result;
+					}
+
+					if (NextToken != TOKEN.COLON)
+					{
+						return result;
+					}
+
+					Read();
+
+					if (wanted.Contains(key))
+					{
+						result[key] = ParseJValue();
+					}
+					else
+					{
+						SkipValue();
+					}
+				}
+			}
+
+			/// <summary>Skip one value without materialising it, tracking nesting depth.</summary>
+			private void SkipValue()
+			{
+				TOKEN token = NextToken;
+
+				if (token is not (TOKEN.CURLY_OPEN or TOKEN.SQUARED_OPEN))
+				{
+					// Scalars (string/number/literal) are a single token; NextToken already consumed
+					// the delimiter for closers, so nothing else to do here.
+					if (token is TOKEN.STRING)
+					{
+						SkipString();
+					}
+
+					return;
+				}
+
+				int depth = 0;
+				bool inString = false;
+				bool escaped = false;
+
+				// The opening bracket itself was not consumed by NextToken.
+				Read();
+
+				while (position < source.Length)
+				{
+					char c = source[position];
+
+					if (inString)
+					{
+						if (escaped)
+						{
+							escaped = false;
+						}
+						else if (c == '\\')
+						{
+							escaped = true;
+						}
+						else if (c == '"')
+						{
+							inString = false;
+						}
+
+						position++;
+						continue;
+					}
+
+					switch (c)
+					{
+						case '"':
+							inString = true;
+							break;
+						case '{':
+						case '[':
+							depth++;
+							break;
+						case '}':
+						case ']':
+							if (depth == 0)
+							{
+								position++;
+								return;
+							}
+
+							depth--;
+							break;
+					}
+
+					position++;
+				}
+			}
+
+			/// <summary>Skip a quoted string without allocating it.</summary>
+			private void SkipString()
+			{
+				Read();
+
+				while (position < source.Length)
+				{
+					char c = source[position];
+
+					if (c == '\\')
+					{
+						position += 2;
+						continue;
+					}
+
+					position++;
+
+					if (c == '"')
+					{
+						return;
+					}
+				}
 			}
 
 			public static object ParsePartially(string jsonString, string upToSection)
@@ -131,14 +320,12 @@ namespace SharpFAI.Serialization
 
 			public void Dispose()
 			{
-				json.Dispose();
-				json = null;
 			}
 
 			private Dictionary<string, object> ParseObject()
 			{
 				Dictionary<string, object> dictionary = new Dictionary<string, object>();
-				json.Read();
+				Read();
 				while (true)
 				{
 					switch (NextToken)
@@ -163,7 +350,7 @@ namespace SharpFAI.Serialization
 					{
 						return dictionary;
 					}
-					json.Read();
+					Read();
 					dictionary[text] = ParseValue();
 				}
 			}
@@ -171,7 +358,7 @@ namespace SharpFAI.Serialization
 			private List<object> ParseArray()
 			{
 				List<object> list = [];
-				json.Read();
+				Read();
 				bool flag = true;
 				while (flag)
 				{
@@ -202,6 +389,111 @@ namespace SharpFAI.Serialization
 				return ParseByToken(nextToken);
 			}
 
+			// ---- Direct JToken production -------------------------------------------------
+			// The Level type exposes Newtonsoft tokens, and converting the loosely typed Dictionary
+			// afterwards means allocating every object twice. Parsing straight into tokens removes the
+			// intermediate tree entirely, which is the single largest saving on a large chart.
+
+			private JObject ParseJObject()
+			{
+				JObject result = [];
+				Read();
+
+				while (true)
+				{
+					switch (NextToken)
+					{
+						case TOKEN.COMMA:
+							continue;
+						case TOKEN.NONE:
+						case TOKEN.CURLY_CLOSE:
+							return result;
+					}
+
+					int before = position;
+					string key = ParseString();
+
+					if (key is null)
+					{
+						return result;
+					}
+
+					if (NextToken != TOKEN.COLON)
+					{
+						return result;
+					}
+
+					Read();
+
+					// A chart can repeat a property name; the Dictionary-based reader overwrote it, so
+					// the token path has to keep that behaviour instead of throwing on Add.
+					result[key] = ParseJValue();
+
+					if (position == before)
+					{
+						return result;
+					}
+				}
+			}
+
+			private JArray ParseJArray()
+			{
+				JArray result = [];
+				Read();
+
+				while (true)
+				{
+					int before = position;
+
+					// The token has to be passed on: reading it a second time inside ParseJValue
+					// consumes the following token as well, which desynchronises the parser on any
+					// literal element such as [null, null] and then loops forever on the next ':'.
+					TOKEN token = NextToken;
+
+					switch (token)
+					{
+						case TOKEN.NONE:
+						case TOKEN.SQUARED_CLOSE:
+							return result;
+						case TOKEN.COMMA:
+							continue;
+					}
+
+					result.Add(ParseJValue(token));
+
+					// A malformed document must never turn into an endless append loop.
+					if (position == before)
+					{
+						return result;
+					}
+				}
+			}
+
+			private JToken ParseJValue() => ParseJValue(NextToken);
+
+			private JToken ParseJValue(TOKEN token)
+			{
+				switch (token)
+				{
+					case TOKEN.STRING:
+						return new JValue(ParseString());
+					case TOKEN.NUMBER:
+						return new JValue(ParseNumber());
+					case TOKEN.CURLY_OPEN:
+						return ParseJObject();
+					case TOKEN.SQUARED_OPEN:
+						return ParseJArray();
+					case TOKEN.TRUE:
+						return new JValue(true);
+					case TOKEN.FALSE:
+						return new JValue(false);
+					case TOKEN.NULL:
+						return JValue.CreateNull();
+					default:
+						return JValue.CreateNull();
+				}
+			}
+
 			private object ParseByToken(TOKEN token)
 			{
 				return token switch
@@ -219,12 +511,40 @@ namespace SharpFAI.Serialization
 
 			private string ParseString()
 			{
+				Read();
+
+				// Most strings in a chart carry no escapes at all, so scan to the closing quote and
+				// slice once. Only fall back to the character-by-character path when a backslash shows
+				// up, which keeps the common case to a single IndexOf plus one allocation.
+				int start = position;
+
+				while (position < source.Length)
+				{
+					char c = source[position];
+
+					if (c == '"')
+					{
+						string plain = source.Substring(start, position - start);
+						position++;
+						return plain;
+					}
+
+					if (c == '\\')
+					{
+						break;
+					}
+
+					position++;
+				}
+
+				// Escape sequence (or end of input) ahead: rebuild the string piecewise.
 				StringBuilder stringBuilder = new StringBuilder();
-				json.Read();
+				stringBuilder.Append(source, start, position - start);
+
 				bool flag = true;
 				while (flag)
 				{
-					if (json.Peek() == -1)
+					if (Peek() == -1)
 					{
 						flag = false;
 						break;
@@ -236,7 +556,7 @@ namespace SharpFAI.Serialization
 						flag = false;
 						break;
 					case '\\':
-						if (json.Peek() == -1)
+						if (Peek() == -1)
 						{
 							flag = false;
 							break;
@@ -266,12 +586,12 @@ namespace SharpFAI.Serialization
 							break;
 						case 'u':
 						{
-							StringBuilder stringBuilder2 = new StringBuilder();
+							int code = 0;
 							for (int i = 0; i < 4; i++)
 							{
-								stringBuilder2.Append(NextChar);
+								code = code * 16 + HexValue(NextChar);
 							}
-							stringBuilder.Append((char)Convert.ToInt32(stringBuilder2.ToString(), 16));
+							stringBuilder.Append((char)code);
 							break;
 						}
 						}
@@ -284,29 +604,112 @@ namespace SharpFAI.Serialization
 				return stringBuilder.ToString();
 			}
 
+			private static int HexValue(char c) => c switch
+			{
+				>= '0' and <= '9' => c - '0',
+				>= 'a' and <= 'f' => c - 'a' + 10,
+				>= 'A' and <= 'F' => c - 'A' + 10,
+				_ => 0,
+			};
+
+			// 数字解析用的复用缓冲：20 万个数字复用同一块内存，避免每格分配字符串/数组
+			// Reusable buffer for numeric parsing: 200k numbers share this one buffer instead of
+			// allocating a string (or an array) per number
+			private readonly char[] numberBuffer = new char[64];
+
+			/// <summary>
+			/// 直接扫描数字字符再一次性解析，避免每个数字都创建临时字符串。
+			/// 语义与原实现保持一致：无小数点/指数的数字返回 int，其余返回 float。
+			/// Scans the numeric characters and parses them in one go, so no temporary string is
+			/// allocated per number. The semantics match the original: a number without a decimal
+			/// point or exponent is returned as int, everything else as float.
+			/// </summary>
 			private object ParseNumber()
 			{
-				string nextWord = NextWord;
-				if (nextWord.IndexOf('.') == -1)
+				char[] buffer = numberBuffer;
+				int length = 0;
+				bool hasPoint = false;
+				bool hasExponent = false;
+
+				int peek = Peek();
+				while (peek != -1)
 				{
-					int.TryParse(nextWord, out var result);
+					char c = (char)peek;
+					if (IsWordBreak(c))
+					{
+						break;
+					}
+
+					if (c == '.')
+					{
+						hasPoint = true;
+					}
+					else if (c is 'e' or 'E')
+					{
+						hasExponent = true;
+					}
+
+					// 超长数字退回字符串路径，正常数字远小于 64 位
+					// Very long numbers fall back to the string path; real ones are far shorter
+					if (length >= buffer.Length)
+					{
+						return ParseNumberSlow(new string(buffer, 0, length));
+					}
+
+					buffer[length] = c;
+					length++;
+					Read();
+					peek = Peek();
+				}
+
+				string text = length == 0 ? "0" : new string(buffer, 0, length);
+
+				if (!hasPoint && !hasExponent)
+				{
+					int.TryParse(text, System.Globalization.NumberStyles.Integer,
+						System.Globalization.CultureInfo.InvariantCulture, out int integer);
+					return integer;
+				}
+
+				float.TryParse(text, System.Globalization.NumberStyles.Float,
+					System.Globalization.CultureInfo.InvariantCulture, out float value);
+				return value;
+			}
+
+			/// <summary>超长数字的兜底解析 / Fallback for numbers that do not fit the inline buffer.</summary>
+			private object ParseNumberSlow(string head)
+			{
+				StringBuilder tail = new StringBuilder(head);
+				int peek = Peek();
+				while (peek != -1 && !IsWordBreak((char)peek))
+				{
+					tail.Append((char)Read());
+					peek = Peek();
+				}
+
+				string text = tail.ToString();
+				if (text.IndexOf('.') == -1 && text.IndexOf('e') == -1 && text.IndexOf('E') == -1)
+				{
+					int.TryParse(text, out int result);
 					return result;
 				}
-				float.TryParse(nextWord, out var result2);
-				return result2;
+
+				float.TryParse(text, System.Globalization.NumberStyles.Float,
+					System.Globalization.CultureInfo.InvariantCulture, out float value);
+				return value;
 			}
 
 			private void EatWhitespace()
 			{
-				while (" \t\n\r\ufeff".IndexOf(PeekChar) != -1)
+				int peek = Peek();
+				while (peek != -1 && IsWhitespace((char)peek))
 				{
-					json.Read();
-					if (json.Peek() == -1)
-					{
-						break;
-					}
+					Read();
+					peek = Peek();
 				}
 			}
+
+			private static bool IsWhitespace(char c) => c is ' ' or '\t' or '\n' or '\r' or '\ufeff';
 		}
 
 		private sealed class Serializer
@@ -455,7 +858,31 @@ namespace SharpFAI.Serialization
 			}
 			return Parser.Parse(json) as Dictionary<string,object>;
 		}
-		
+
+		/// <summary>
+		/// 直接解析成 Newtonsoft 的 JObject，跳过 Dictionary 中间层。
+		/// Parses straight into a <see cref="JObject"/>, skipping the intermediate Dictionary.
+		/// </summary>
+		/// <remarks>
+		/// The Level type exposes tokens, so building a Dictionary only to convert it costs a second
+		/// full allocation of the whole document. On a 40 MB chart that is several seconds.
+		/// </remarks>
+		public static JObject DeserializeToken(string json)
+		{
+			if (json == null)
+			{
+				return null;
+			}
+			return Parser.ParseToken(json);
+		}
+
+		/// <summary>直接解析成 JObject（从文件）/ Parses a file straight into a <see cref="JObject"/>.</summary>
+		public static JObject DeserializeTokenFile(string path)
+		{
+			if (path == null) throw new ArgumentNullException(nameof(path));
+			return Parser.ParseToken(File.ReadAllText(path));
+		}
+
 		public static Dictionary<string,object> DeserializeFile(string path)
 		{
 			if (path == null) throw new ArgumentNullException(nameof(path));

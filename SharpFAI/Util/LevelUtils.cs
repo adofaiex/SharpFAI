@@ -562,22 +562,39 @@ public static class LevelUtils
             float[] angle1Arr = new float[n];
             float[] angle2Arr = new float[n];
             progressCallback?.Invoke(50, "初始化位置");
-            List<PositionTrack> positionTracks = allEvents.Where(e => e is PositionTrack).Cast<PositionTrack>().ToList();
+
+            // 按地板号建索引，避免每格都扫一遍全表（那是 O(格数 × 事件数)）
+            // Index by floor index instead of rescanning the whole list per tile
+            Dictionary<int, List<BaseEvent>> eventsByFloor = BuildEventsByFloor(allEvents);
+
+            // PositionTrack 同样按地板号索引 / Index the PositionTrack events the same way
+            Dictionary<int, List<PositionTrack>> positionTracksByFloor = [];
+            foreach (BaseEvent baseEvent in allEvents)
+            {
+                if (baseEvent is PositionTrack track && !track.EditorOnly)
+                {
+                    if (!positionTracksByFloor.TryGetValue(track.Floor, out List<PositionTrack>? list))
+                    {
+                        list = [];
+                        positionTracksByFloor[track.Floor] = list;
+                    }
+
+                    list.Add(track);
+                }
+            }
+
             for (int i = 0; i < n; i++)
             {
                 float angle1 = (i == anglesArray.Length) ? (float)anglesArray[i - 1] : (float)anglesArray[i];
                 float angle2 = (i == 0) ? 0 : (float)anglesArray[i - 1];
                 // 先判断当前floor是否有PositionTrack，若有则修正startPos
-                if (usePositionTrack)
+                if (usePositionTrack && positionTracksByFloor.TryGetValue(i, out List<PositionTrack>? tracks))
                 {
-                    foreach (var positionTrack in positionTracks)
+                    foreach (PositionTrack positionTrack in tracks)
                     {
-                        if (positionTrack.Floor == i && !positionTrack.EditorOnly)
-                        {
-                            Vector2 position = new Vector2(positionTrack.PositionOffset[0].ToFloat(),
-                                positionTrack.PositionOffset[1].ToFloat());
-                            startPos += new Vector2(position.X * Floor.length * 2, position.Y * Floor.length * 2);
-                        }
+                        Vector2 position = new Vector2(positionTrack.PositionOffset[0].ToFloat(),
+                            positionTrack.PositionOffset[1].ToFloat());
+                        startPos += new Vector2(position.X * Floor.length * 2, position.Y * Floor.length * 2);
                     }
                 }
 
@@ -617,7 +634,12 @@ public static class LevelUtils
                 }
 
                 tile.bpm = bpm;
-                if (level.HasEvents(i, EventType.Twirl))
+
+                // 事件取自预建的索引 / Events come from the prebuilt index
+                eventsByFloor.TryGetValue(i, out List<BaseEvent>? floorEvents);
+                tile.events = floorEvents ?? [];
+
+                if (HasEventType(floorEvents, EventType.Twirl))
                 {
                     isCW = !isCW;
                 }
@@ -636,13 +658,238 @@ public static class LevelUtils
 
                 tile.entryTime = noteTimes[i].Item1;
                 tile.renderOrder = -i;
-                tile.events = allEvents.Where(x => x.Floor == i).ToList();
+                tile.icon = ResolveFloorIcon(tile.events, tile, i > 0 ? tileArr[i - 1] : null);
+
+                // 逐格随机的贴图变换（官方 _UV2Offset）：z 决定旋转，xy 决定平移。
+                // 官方 RandomVector() 返回 Unity Random.value，即 **0..1 全区间**，
+                // 而非小幅度抖动，这样相邻砖块采到的贴图区域才会完全不同。
+                // The game's per-tile `_UV2Offset`: z rotates, xy translate. `RandomVector()` returns
+                // Unity's `Random.value`, i.e. the full 0..1 range rather than a small jitter, which
+                // is what makes neighbouring tiles sample far-apart texture regions.
+                tile.textureRotation = Hash01(i);
+                tile.textureOffsetX = Hash01(i * 3 + 1);
+                tile.textureOffsetY = Hash01(i * 3 + 2);
+
                 floors.Add(tile);
                 progressCallback?.Invoke(75, $"初始化变速与链表关系({i}/{tileArr.Length - 1})");
             }
 
             progressCallback?.Invoke(100, "完成");
             return floors;
+        }
+
+        /// <summary>
+        /// 按官方优先级从事件推断地板图标：Twirl &gt; Hold &gt; Pause &gt; SetSpeed，
+        /// 并同时写入图标的翻转与旋转角。
+        /// 旋转按本格扫过角分红色（&lt; 半圈）/ 蓝色（≥ 半圈），
+        /// 变速按速度变化方向分兔子（加速）/ 蜗牛（减速）。
+        /// Mirrors the game's precedence when picking the icon for a tile and fills in the icon's flip
+        /// and rotation. A twirl picks the red swirl when the planet sweeps less than half a turn on
+        /// this tile and the blue one otherwise; a speed change picks the rabbit when speeding up and
+        /// the snail when slowing down.
+        /// </summary>
+        /// <param name="events">该格的事件 / Events on this tile.</param>
+        /// <param name="tile">该格本身，用于读取变速与朝向 / The tile itself, for speed and orientation.</param>
+        /// <param name="previous">该格的前一格 / The previous tile.</param>
+        private static FloorIcon ResolveFloorIcon(List<BaseEvent> events, Floor tile, Floor? previous)
+        {
+            FloorIcon result = FloorIcon.None;
+
+            foreach (BaseEvent ev in events)
+            {
+                switch (ev)
+                {
+                    case Twirl:
+                        return ResolveTwirlIcon(tile, previous);
+
+                    case Hold:
+                        result = FloorIcon.Hold;
+                        break;
+
+                    case Pause when result == FloorIcon.None:
+                        result = FloorIcon.Pause;
+                        break;
+
+                    case SetSpeed setSpeed when result == FloorIcon.None:
+                        // 官方 scnGame：(speed - prevSpeed) / prevSpeed，正为加速、负为减速。
+                        // bpm = 基准 bpm × speed，所以相对变化与 speed 完全等价。
+                        // The game compares the tile's speed with the previous tile's. Since
+                        // bpm = baseBpm * speed, the relative change matches the speed's exactly.
+                        double previousBpm = previous?.bpm > 1e-9 ? previous.bpm : tile.bpm;
+                        result = ResolveSpeedIcon(tile, setSpeed, previousBpm);
+                        break;
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// 官方 scrFloor.UpdateIconSprite 的旋转图标分支：扫过角小于半圈用红色漩涡，否则蓝色漩涡；
+        /// 逆时针（<c>!isCW</c>）时水平翻转，旋转角取弧的角平分线方向。
+        /// The game's swirl branch in <c>scrFloor.UpdateIconSprite</c>: the red swirl below half a turn
+        /// and the blue one otherwise; flipped horizontally when counter-clockwise, with the icon rotated
+        /// to the bisector of the swept arc.
+        /// </summary>
+        private static FloorIcon ResolveTwirlIcon(Floor tile, Floor? previous)
+        {
+            double previousAngle = previous?.angle ?? tile.angle;
+            double swept = SweptDegrees(previousAngle, tile.angle, tile.isCW, tile.isMidspin);
+
+            // 官方阈值是半圈（Mathf.PI）/ The game's threshold is half a turn
+            bool shortArc = swept < 180.0;
+
+            // 官方 SetIconFlipped(isCCW)，isCCW = !isCW / The game flips when turning counter-clockwise
+            tile.iconFlipped = !tile.isCW;
+            tile.iconAngle = IconAngleRadians(tile, previous, swept);
+
+            return shortArc ? FloorIcon.TwirlShort : FloorIcon.TwirlLong;
+        }
+
+        /// <summary>
+        /// 图标旋转角（弧度），逐字复刻官方 <c>SetIconAngle</c> 的网格分支：
+        /// <c>entryangle + 扫过角 / 2 * (isCW ? 1 : -1)</c>。
+        /// 其中 <c>entryangle</c> 是官方角度空间的方位角 <c>270° - 前一格角度</c>，
+        /// 因为两边的顶点坐标数值一致，直接沿用官方数值即可，不需要换算。
+        /// The icon's rotation, replicating the game's mesh branch of <c>SetIconAngle</c>. The game's
+        /// <c>entryangle</c> lives in its own angle space (<c>270 - previous tile angle</c>); both
+        /// engines produce the same vertex coordinates, so the raw value carries over unchanged.
+        /// </summary>
+        private static float IconAngleRadians(Floor tile, Floor? previous, double sweptDegrees)
+        {
+            // 官方 entryangle = exitangle(prev) + 180°，exitangle = 90° - 角度；
+            // 第 0 格没有上一格，官方的 entryangle 固定为 270°。
+            // The game's entryangle is exitangle(prev) + 180 where exitangle = 90 - tileAngle. Floor 0
+            // has no predecessor and the game hard-codes its entry angle to 270 deg.
+            double entry = previous is null ? 270.0 : 270.0 - previous.angle;
+
+            double direction = tile.isCW ? 1.0 : -1.0;
+            return (float)((entry + sweptDegrees / 2.0 * direction) * Math.PI / 180.0);
+        }
+
+        /// <summary>
+        /// 按速度变化方向挑兔子或蜗牛；变化不足 5% 时视为不变速，不显示图标。
+        /// Pick the rabbit or snail from the speed change; a change under 5% counts as unchanged and
+        /// shows no icon, matching the game's threshold.
+        /// </summary>
+        /// <param name="tile">本格 / This tile.</param>
+        /// <param name="setSpeed">触发图标的事件 / The event that triggered the icon.</param>
+        /// <param name="previousBpm">前一格的 BPM / The previous tile's BPM.</param>
+        private static FloorIcon ResolveSpeedIcon(Floor tile, SetSpeed setSpeed, double previousBpm)
+        {
+            double reference = previousBpm > 1e-9 ? previousBpm : (tile.bpm > 1e-9 ? tile.bpm : 120.0);
+            double relative = (tile.bpm - reference) / reference;
+
+            // 事件自己就说明了变化方向时以它为准，避免 bpm 回填时机带来的歧义
+            // Prefer the event's own setting, which states the direction unambiguously
+            if (setSpeed.SpeedType == EventEnums.SpeedType.Multiplier)
+            {
+                relative = setSpeed.BpmMultiplier - 1.0;
+            }
+            else if (Math.Abs(relative) < 1e-9 && setSpeed.BeatsPerMinute > 1e-9)
+            {
+                relative = setSpeed.BeatsPerMinute - reference;
+            }
+
+            if (relative > 0.05)
+            {
+                return FloorIcon.SpeedUp;
+            }
+
+            if (relative < -0.05)
+            {
+                return FloorIcon.SpeedDown;
+            }
+
+            return FloorIcon.None;
+        }
+
+        /// <summary>
+        /// 本格行星扫过的角度（度），对应官方 <c>scrMisc.GetAngleMoved</c> 的 mod 语义。
+        /// 掉头砖 mod 后为 0，但官方仍按整圈处理；只有中旋格真的不动。
+        /// The swept angle in degrees for a tile, mirroring <c>scrMisc.GetAngleMoved</c>'s mod
+        /// semantics. A U-turn tile collapses to 0 but still travels a full circle; only midspin tiles
+        /// genuinely do not move.
+        /// </summary>
+        /// <param name="previousAngle">前一格朝向 / Previous tile heading in degrees.</param>
+        /// <param name="angle">本格朝向 / This tile's heading in degrees.</param>
+        /// <param name="isCW">是否顺时针 / Whether the rotation is clockwise.</param>
+        /// <param name="isMidspin">是否中旋格 / Whether this is a midspin tile.</param>
+        public static double SweptDegrees(double previousAngle, double angle, bool isCW, bool isMidspin)
+        {
+            double direction = isCW ? -1.0 : 1.0;
+            double swept = Mod360((angle - (previousAngle + 180.0)) * direction);
+
+            if (swept <= 1e-6 || swept >= 360.0 - 1e-6)
+            {
+                swept = isMidspin ? 0.0 : 360.0;
+            }
+
+            return swept;
+        }
+
+        private static double Mod360(double degrees) => (degrees % 360.0 + 360.0) % 360.0;
+
+        /// <summary>
+        /// 把事件按地板号分组，一次遍历换取后续每次 O(1) 查询。
+        /// Groups events by floor index: one pass now, O(1) lookups afterwards.
+        /// </summary>
+        private static Dictionary<int, List<BaseEvent>> BuildEventsByFloor(List<BaseEvent> events)
+        {
+            Dictionary<int, List<BaseEvent>> byFloor = new(events.Count);
+
+            foreach (BaseEvent ev in events)
+            {
+                int floor = ev.Floor;
+                if (!byFloor.TryGetValue(floor, out List<BaseEvent>? list))
+                {
+                    list = [];
+                    byFloor[floor] = list;
+                }
+
+                list.Add(ev);
+            }
+
+            return byFloor;
+        }
+
+        /// <summary>
+        /// 查询某格是否含有指定类型的事件（等价 <c>level.HasEvents(floor, type)</c>，但不重新扫描）。
+        /// Whether the floor's event list contains the given type, without rescanning the whole level.
+        /// </summary>
+        private static bool HasEventType(List<BaseEvent>? events, EventType type)
+        {
+            if (events is null)
+            {
+                return false;
+            }
+
+            foreach (BaseEvent ev in events)
+            {
+                if (ev.EventType == type)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// 把地板索引散列成 [0,1) 的确定性随机数，用于砖块贴图的随机朝向。
+        /// Hashes a floor index into a deterministic value in [0,1) for the tile's random orientation.
+        /// </summary>
+        private static float Hash01(int value)
+        {
+            // 32 位整型的雪崩混合，分布均匀且不依赖运行时的随机源
+            // A 32-bit avalanche mix: well distributed and independent of any runtime RNG
+            uint x = (uint)value;
+            x ^= x >> 16;
+            x *= 0x7feb352dU;
+            x ^= x >> 15;
+            x *= 0x846ca68bU;
+            x ^= x >> 16;
+            return (x & 0xFFFFFF) / 16777216f;
         }
 
         /// <summary>
