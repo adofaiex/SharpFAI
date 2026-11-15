@@ -17,8 +17,8 @@
     <Product>SharpFAI</Product>
     <Description>ADOFAI Level Parse Library - A C# library for parsing and manipulating ADOFAI (A Dance of Fire and Ice) level file</Description>
     <PackageTags>ADOFAI;Game;Level;Parser;JSON</PackageTags>
-    <PackageProjectUrl>https://github.com/StArrayJaN/SharpFAI</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/StArrayJaN/SharpFAI</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/adofaiex/SharpFAI</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/adofaiex/SharpFAI</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageLicenseExpression>GPL-3.0-or-later</PackageLicenseExpression>
     <Copyright>Copyright StArray© 2025</Copyright>
@@ -31,5 +31,11 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="..\README.md" Pack="true" PackagePath="\" />
+    <!--
+      GPLv3 全文随包分发；PackageLicenseExpression 只给 SPDX 标识，NuGet 要求两者配套出现。
+      The full GPLv3 text ships with the package: PackageLicenseExpression only carries the SPDX
+      identifier, and NuGet expects the licence text alongside it.
+    -->
+    <None Include="..\LICENSE" Pack="true" PackagePath="\" Visible="false" />
   </ItemGroup>
 </Project>
