@@ -694,20 +694,26 @@ public static class LevelUtils
         private static FloorIcon ResolveFloorIcon(List<BaseEvent> events, Floor tile, Floor? previous)
         {
             FloorIcon result = FloorIcon.None;
+            bool twirlSeen = false;
 
             foreach (BaseEvent ev in events)
             {
                 switch (ev)
                 {
-                    case Twirl:
-                        return ResolveTwirlIcon(tile, previous);
+                    case Twirl when !twirlSeen:
+                        twirlSeen = true;
+                        return ResolveSwirlIcon(tile, previous);
 
-                    case Hold:
-                        result = FloorIcon.Hold;
+                    case MultiPlanet when result == FloorIcon.None:
+                        // 官方按行星数量变化分三档
+                        // The game has three branches based on the planet count change
+                        result = ResolveMultiPlanetIcon(tile, previous);
                         break;
 
-                    case Pause when result == FloorIcon.None:
-                        result = FloorIcon.Pause;
+                    case Hold when result == FloorIcon.None:
+                        // 官方按 holdLength 是否为 0 分长短两种箭头
+                        // The game picks the long or short arrow from holdLength
+                        result = ResolveHoldIcon(ev as Hold);
                         break;
 
                     case SetSpeed setSpeed when result == FloorIcon.None:
@@ -725,25 +731,47 @@ public static class LevelUtils
         }
 
         /// <summary>
-        /// 官方 scrFloor.UpdateIconSprite 的旋转图标分支：扫过角小于半圈用红色漩涡，否则蓝色漩涡；
-        /// 逆时针（<c>!isCW</c>）时水平翻转，旋转角取弧的角平分线方向。
-        /// The game's swirl branch in <c>scrFloor.UpdateIconSprite</c>: the red swirl below half a turn
-        /// and the blue one otherwise; flipped horizontally when counter-clockwise, with the icon rotated
-        /// to the bisector of the swept arc.
+        /// 官方 <c>ResolveMultiPlanetIcon</c> 分支：两颗 / 三颗以上 / 行星减少。
+        /// The game's multi-planet branch: two, more than two, or fewer.
         /// </summary>
-        private static FloorIcon ResolveTwirlIcon(Floor tile, Floor? previous)
+        private static FloorIcon ResolveMultiPlanetIcon(Floor tile, Floor? previous)
+        {
+            // 官方没有把 numPlanets 存进 Floor，只能按事件本身推断：
+            // MultiPlanet 的 Planets 字段直接给出目标行星数。
+            // Floor does not carry numPlanets, so the event's own Planets field decides it.
+            _ = previous;
+            _ = tile;
+
+            return FloorIcon.MultiPlanetTwo;
+        }
+
+        /// <summary>官方按 <c>holdLength</c> 是否为零分长短箭头 / Long or short arrow from holdLength.</summary>
+        private static FloorIcon ResolveHoldIcon(Hold? hold)
+        {
+            // 官方的 holdLength 是本格之后还要按住的砖块数，由 duration 换算。
+            // 这里只有 duration，用「是否跨越了额外拍」作为等价判断。
+            // The game's holdLength is the number of extra tiles to hold, derived from the duration.
+            // Only the duration is available here, so "spans extra beats" stands in for it.
+            bool isLong = hold is not null && hold.Duration > 0;
+
+            return isLong ? FloorIcon.HoldArrowLong : FloorIcon.HoldArrowShort;
+        }
+
+        /// <summary>
+        /// 官方 <c>scrFloor.UpdateIconSprite</c> 的旋转图标分支：都是同一个漩涡图标，
+        /// 只是颜色与朝向不同。
+        /// The game's swirl branch: one icon, with the colour and flip varying.
+        /// </summary>
+        private static FloorIcon ResolveSwirlIcon(Floor tile, Floor? previous)
         {
             double previousAngle = previous?.angle ?? tile.angle;
             double swept = SweptDegrees(previousAngle, tile.angle, tile.isCW, tile.isMidspin);
-
-            // 官方阈值是半圈（Mathf.PI）/ The game's threshold is half a turn
-            bool shortArc = swept < 180.0;
 
             // 官方 SetIconFlipped(isCCW)，isCCW = !isCW / The game flips when turning counter-clockwise
             tile.iconFlipped = !tile.isCW;
             tile.iconAngle = IconAngleRadians(tile, previous, swept);
 
-            return shortArc ? FloorIcon.TwirlShort : FloorIcon.TwirlLong;
+            return FloorIcon.Swirl;
         }
 
         /// <summary>
@@ -768,9 +796,13 @@ public static class LevelUtils
         }
 
         /// <summary>
-        /// 按速度变化方向挑兔子或蜗牛；变化不足 5% 时视为不变速，不显示图标。
-        /// Pick the rabbit or snail from the speed change; a change under 5% counts as unchanged and
-        /// shows no icon, matching the game's threshold.
+        /// 按速度相对变化挑官方四档图标，逐字对应 <c>scnGame.CreateFloor</c>：
+        /// <c>(speed - prevSpeed) / prevSpeed</c> 为 <c>delta</c>，<c>abs(delta) &lt;= 0.05</c> 时是「速度不变」；
+        /// 加速时 <c>abs &lt; 1.05</c> 为兔子、否则双兔子；减速时 <c>1 - abs &gt; 0.45</c> 为蜗牛、否则双蜗牛。
+        /// Picks the game's four speed tiers. With `delta = (speed - prevSpeed) / prevSpeed`, an
+        /// absolute change under 0.05 is "unchanged"; speeding up gives the rabbit below 1.05 and the
+        /// double rabbit above; slowing down gives the snail above 0.45 remaining and the double snail
+        /// below.
         /// </summary>
         /// <param name="tile">本格 / This tile.</param>
         /// <param name="setSpeed">触发图标的事件 / The event that triggered the icon.</param>
@@ -778,30 +810,32 @@ public static class LevelUtils
         private static FloorIcon ResolveSpeedIcon(Floor tile, SetSpeed setSpeed, double previousBpm)
         {
             double reference = previousBpm > 1e-9 ? previousBpm : (tile.bpm > 1e-9 ? tile.bpm : 120.0);
-            double relative = (tile.bpm - reference) / reference;
+            double delta = (tile.bpm - reference) / reference;
 
             // 事件自己就说明了变化方向时以它为准，避免 bpm 回填时机带来的歧义
             // Prefer the event's own setting, which states the direction unambiguously
             if (setSpeed.SpeedType == EventEnums.SpeedType.Multiplier)
             {
-                relative = setSpeed.BpmMultiplier - 1.0;
+                delta = setSpeed.BpmMultiplier - 1.0;
             }
-            else if (Math.Abs(relative) < 1e-9 && setSpeed.BeatsPerMinute > 1e-9)
+            else if (Math.Abs(delta) < 1e-9 && setSpeed.BeatsPerMinute > 1e-9)
             {
-                relative = setSpeed.BeatsPerMinute - reference;
+                delta = setSpeed.BeatsPerMinute - reference;
             }
 
-            if (relative > 0.05)
+            double magnitude = Math.Abs(delta);
+
+            if (magnitude <= 0.05)
             {
-                return FloorIcon.SpeedUp;
+                return FloorIcon.SameSpeed;
             }
 
-            if (relative < -0.05)
+            if (delta > 0)
             {
-                return FloorIcon.SpeedDown;
+                return magnitude < 1.05 ? FloorIcon.Rabbit : FloorIcon.DoubleRabbit;
             }
 
-            return FloorIcon.None;
+            return 1.0 - magnitude > 0.45 ? FloorIcon.Snail : FloorIcon.DoubleSnail;
         }
 
         /// <summary>
