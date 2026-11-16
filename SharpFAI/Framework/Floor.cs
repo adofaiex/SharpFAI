@@ -106,6 +106,13 @@ public class Floor
     public float iconAngle;
 
     /// <summary>
+    /// 该砖的漩涡图标是否用红色版本。官方按本格扫过角判定：不足半圈用红色，否则蓝色。
+    /// Whether the swirl icon on this tile uses the red variant. The game picks red when the swept
+    /// angle is under half a turn and blue otherwise.
+    /// </summary>
+    public bool swirlRed;
+
+    /// <summary>
     /// 砖块贴图的随机旋转量，取值 [0,1)，对应官方的 <c>_UV2Offset.z</c>。
     /// 着色器把它乘 π 作为贴图 UV 的旋转角，让相邻砖块的纹理朝向各不相同。
     /// The tile texture's random rotation in [0,1), matching the game's <c>_UV2Offset.z</c>. The

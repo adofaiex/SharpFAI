@@ -516,6 +516,12 @@ public static class LevelUtils
             List<bool> midSpins = new();
             for (int i = 0; i < anglesArray.Length; i++)
             {
+                // 官方 scrLevelMaker 的循环里 `scrFloor4` 是「当前处理的砖」，
+                // `if (num4 == 999f) scrFloor4.midSpin = true;` 直接把标记打在这块砖上，
+                // 所以 floorAngles[i] == 999 对应的就是 floors[i].isMidspin。
+                // The game's loop uses scrFloor4 as the tile being processed, and
+                // `if (num4 == 999f) scrFloor4.midSpin = true;` flags that same tile, so
+                // floorAngles[i] == 999 maps straight onto floors[i].isMidspin.
                 midSpins.Add(anglesArray[i].Equals(999));
                 if (anglesArray[i].Equals(999))
                 {
@@ -707,7 +713,7 @@ public static class LevelUtils
                     case MultiPlanet when result == FloorIcon.None:
                         // 官方按行星数量变化分三档
                         // The game has three branches based on the planet count change
-                        result = ResolveMultiPlanetIcon(tile, previous);
+                        result = ResolveMultiPlanetIcon(ev as MultiPlanet);
                         break;
 
                     case Hold when result == FloorIcon.None:
@@ -734,33 +740,36 @@ public static class LevelUtils
         /// 官方 <c>ResolveMultiPlanetIcon</c> 分支：两颗 / 三颗以上 / 行星减少。
         /// The game's multi-planet branch: two, more than two, or fewer.
         /// </summary>
-        private static FloorIcon ResolveMultiPlanetIcon(Floor tile, Floor? previous)
+        private static FloorIcon ResolveMultiPlanetIcon(MultiPlanet? multiPlanet)
         {
-            // 官方没有把 numPlanets 存进 Floor，只能按事件本身推断：
-            // MultiPlanet 的 Planets 字段直接给出目标行星数。
-            // Floor does not carry numPlanets, so the event's own Planets field decides it.
-            _ = previous;
-            _ = tile;
-
-            return FloorIcon.MultiPlanetTwo;
+            // 官方 scnGame：本格 numPlanets 为 2 用 Two，比前一块多用 More，否则用 Less。
+            // 这里 numPlanets 就是事件的目标行星数，2 之外只可能是 3。
+            // The game uses Two when the tile's planet count is 2, More when it grew, Less otherwise.
+            // Here the event's target count is the tile's count, so anything above 2 means three.
+            return multiPlanet?.Planets == EventEnums.PlanetCount.ThreePlanets
+                ? FloorIcon.MultiPlanetThreeMore
+                : FloorIcon.MultiPlanetTwo;
         }
 
         /// <summary>官方按 <c>holdLength</c> 是否为零分长短箭头 / Long or short arrow from holdLength.</summary>
         private static FloorIcon ResolveHoldIcon(Hold? hold)
         {
-            // 官方的 holdLength 是本格之后还要按住的砖块数，由 duration 换算。
-            // 这里只有 duration，用「是否跨越了额外拍」作为等价判断。
-            // The game's holdLength is the number of extra tiles to hold, derived from the duration.
-            // Only the duration is available here, so "spans extra beats" stands in for it.
-            bool isLong = hold is not null && hold.Duration > 0;
+            // 官方 scnGame：`holdLength = (int)item["duration"]`，随后
+            // `floorIcon = (holdLength != 0) ? HoldArrowLong : HoldArrowShort`。
+            // 也就是说取整后仍大于 0 才是长箭头，`0.9` 秒这类短按归为短箭头。
+            // The game sets `holdLength = (int)duration` and then picks
+            // `holdLength != 0 ? HoldArrowLong : HoldArrowShort`, so anything truncating to zero is
+            // the short arrow.
+            int holdLength = hold is null ? 0 : (int)hold.Duration;
 
-            return isLong ? FloorIcon.HoldArrowLong : FloorIcon.HoldArrowShort;
+            return holdLength != 0 ? FloorIcon.HoldArrowLong : FloorIcon.HoldArrowShort;
         }
 
         /// <summary>
-        /// 官方 <c>scrFloor.UpdateIconSprite</c> 的旋转图标分支：都是同一个漩涡图标，
-        /// 只是颜色与朝向不同。
-        /// The game's swirl branch: one icon, with the colour and flip varying.
+        /// 官方 <c>scrFloor.UpdateIconSprite</c> 的旋转图标分支：同一个漩涡图标，
+        /// 按本格扫过角分红色（小于半圈）/ 蓝色（半圈及以上）。
+        /// The game's swirl branch: one icon whose colour depends on the swept angle — red below half
+        /// a turn, blue at or above it.
         /// </summary>
         private static FloorIcon ResolveSwirlIcon(Floor tile, Floor? previous)
         {
@@ -770,6 +779,12 @@ public static class LevelUtils
             // 官方 SetIconFlipped(isCCW)，isCCW = !isCW / The game flips when turning counter-clockwise
             tile.iconFlipped = !tile.isCW;
             tile.iconAngle = IconAngleRadians(tile, previous, swept);
+
+            // 官方：`num < PI` 用红色漩涡，否则蓝色（num 是本格扫过的弧度）。
+            // The game uses the red swirl when the swept angle is under PI radians, blue otherwise.
+            double sweptRadians = swept * Math.PI / 180.0;
+
+            tile.swirlRed = sweptRadians < Math.PI;
 
             return FloorIcon.Swirl;
         }
