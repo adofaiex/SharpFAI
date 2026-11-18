@@ -507,13 +507,18 @@ public static class LevelUtils
         /// 并生成具有正确位置、角度、BPM和网格数据的Floor实例。
         /// </remarks>
         public List<Floor> CreateFloors(Vector2 startPosition = default,
-            bool usePositionTrack = false)
+            bool usePositionTrack = false) => level.CreateFloors(startPosition, usePositionTrack, calculateLegacyEntryTimes: true);
+
+        /// <summary>Creates floors, optionally omitting entry times when the caller supplies a playback timeline.</summary>
+        /// <param name="startPosition">World position of the first tile.</param>
+        /// <param name="usePositionTrack">Whether to apply position events during floor creation.</param>
+        /// <param name="calculateLegacyEntryTimes">Whether to populate each floor's legacy entry time.</param>
+        public List<Floor> CreateFloors(Vector2 startPosition, bool usePositionTrack, bool calculateLegacyEntryTimes)
         {
-            List<Floor> floors = new List<Floor>();
             progressCallback?.Invoke(0, "获取打击时间点");
-            var noteTimes = level.GetNoteTimes();
+            var noteTimes = calculateLegacyEntryTimes ? level.GetNoteTimes() : null;
             double[] anglesArray = level.angles.ToArray();
-            List<bool> midSpins = new();
+            bool[] midSpins = new bool[anglesArray.Length];
             for (int i = 0; i < anglesArray.Length; i++)
             {
                 // 官方 scrLevelMaker 的循环里 `scrFloor4` 是「当前处理的砖」，
@@ -522,7 +527,7 @@ public static class LevelUtils
                 // The game's loop uses scrFloor4 as the tile being processed, and
                 // `if (num4 == 999f) scrFloor4.midSpin = true;` flags that same tile, so
                 // floorAngles[i] == 999 maps straight onto floors[i].isMidspin.
-                midSpins.Add(anglesArray[i].Equals(999));
+                midSpins[i] = anglesArray[i].Equals(999);
                 if (anglesArray[i].Equals(999))
                 {
                     anglesArray[i] = anglesArray[i - 1] + 180;
@@ -530,6 +535,7 @@ public static class LevelUtils
             }
 
             int n = anglesArray.Length + 1;
+            List<Floor> floors = new(n);
             double[] SetSpeedBpm = new Double[n];
             double[] SetSpeedMultiplier = new Double[n];
             bool[] setSpeedIsMultiplier = new Boolean[n];
@@ -542,7 +548,7 @@ public static class LevelUtils
 
             Vector2 startPos = new Vector2(startPosition.X, startPosition.Y);
             progressCallback?.Invoke(25, "初始化事件");
-            List<BaseEvent> allEvents = level.DeserializeEvents().ToList();
+            IReadOnlyList<BaseEvent> allEvents = level.DeserializeEvents();
             for (int a = 0; a < allEvents.Count; a++)
             {
                 BaseEvent eventObj = allEvents[a];
@@ -564,14 +570,11 @@ public static class LevelUtils
 
             // 1. 并行批量创建Floor及其Mesh
             Floor[] tileArr = new Floor[n];
-            Vector2[] posArr = new Vector2[n];
-            float[] angle1Arr = new float[n];
-            float[] angle2Arr = new float[n];
             progressCallback?.Invoke(50, "初始化位置");
 
             // 按地板号建索引，避免每格都扫一遍全表（那是 O(格数 × 事件数)）
             // Index by floor index instead of rescanning the whole list per tile
-            Dictionary<int, List<BaseEvent>> eventsByFloor = BuildEventsByFloor(allEvents);
+            List<BaseEvent>?[] eventsByFloor = BuildEventsByFloor(allEvents, n);
 
             // PositionTrack 同样按地板号索引 / Index the PositionTrack events the same way
             Dictionary<int, List<PositionTrack>> positionTracksByFloor = [];
@@ -604,13 +607,10 @@ public static class LevelUtils
                     }
                 }
 
-                posArr[i] = new(startPos.X, startPos.Y);
-                angle1Arr[i] = angle1;
-                angle2Arr[i] = angle2;
+                Floor tile = new Floor(angle1, angle2 - 180, startPos);
                 Vector2 step = new Vector2(Floor.length * 2 * FloatMath.Cos(angle1, true),
                     Floor.length * 2 * FloatMath.Sin(angle1, true));
                 startPos += (step);
-                Floor tile = new Floor(angle1Arr[i], angle2Arr[i] - 180, posArr[i]);
                 if (i == anglesArray.Length)
                 {
                     tile.isMidspin = (false);
@@ -642,7 +642,7 @@ public static class LevelUtils
                 tile.bpm = bpm;
 
                 // 事件取自预建的索引 / Events come from the prebuilt index
-                eventsByFloor.TryGetValue(i, out List<BaseEvent>? floorEvents);
+                List<BaseEvent>? floorEvents = eventsByFloor[i];
                 tile.events = floorEvents ?? [];
 
                 if (HasEventType(floorEvents, EventType.Twirl))
@@ -662,7 +662,7 @@ public static class LevelUtils
                     tile.lastFloor = tileArr[i - 1];
                 }
 
-                tile.entryTime = noteTimes[i].Item1;
+                tile.entryTime = noteTimes?[i].Item1 ?? 0.0;
                 tile.renderOrder = -i;
                 tile.icon = ResolveFloorIcon(tile.events, tile, i > 0 ? tileArr[i - 1] : null);
 
@@ -883,20 +883,15 @@ public static class LevelUtils
         /// 把事件按地板号分组，一次遍历换取后续每次 O(1) 查询。
         /// Groups events by floor index: one pass now, O(1) lookups afterwards.
         /// </summary>
-        private static Dictionary<int, List<BaseEvent>> BuildEventsByFloor(List<BaseEvent> events)
+        private static List<BaseEvent>?[] BuildEventsByFloor(IReadOnlyList<BaseEvent> events, int floorCount)
         {
-            Dictionary<int, List<BaseEvent>> byFloor = new(events.Count);
+            List<BaseEvent>?[] byFloor = new List<BaseEvent>?[floorCount];
 
             foreach (BaseEvent ev in events)
             {
                 int floor = ev.Floor;
-                if (!byFloor.TryGetValue(floor, out List<BaseEvent>? list))
-                {
-                    list = [];
-                    byFloor[floor] = list;
-                }
-
-                list.Add(ev);
+                if ((uint)floor < (uint)floorCount)
+                    (byFloor[floor] ??= []).Add(ev);
             }
 
             return byFloor;

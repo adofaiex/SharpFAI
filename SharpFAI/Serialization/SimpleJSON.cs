@@ -34,6 +34,7 @@ namespace SharpFAI.Serialization
 			// Direct index over the source text. StringReader.Peek()/Read() are virtual calls that cost
 			// more than the parse work itself on a 40 MB chart, so the parser walks the string.
 			private readonly string source;
+			private readonly string?[] shortStrings = new string?[256];
 
 			private int position;
 
@@ -513,9 +514,8 @@ namespace SharpFAI.Serialization
 			{
 				Read();
 
-				// Most strings in a chart carry no escapes at all, so scan to the closing quote and
-				// slice once. Only fall back to the character-by-character path when a backslash shows
-				// up, which keeps the common case to a single IndexOf plus one allocation.
+				// Scan plain strings directly. Event keys and names recur throughout a chart,
+				// so reuse short strings within this parse without retaining them globally.
 				int start = position;
 
 				while (position < source.Length)
@@ -524,7 +524,7 @@ namespace SharpFAI.Serialization
 
 					if (c == '"')
 					{
-						string plain = source.Substring(start, position - start);
+						string plain = GetPlainString(start, position - start);
 						position++;
 						return plain;
 					}
@@ -604,6 +604,19 @@ namespace SharpFAI.Serialization
 				return stringBuilder.ToString();
 			}
 
+			private string GetPlainString(int start, int length)
+			{
+				if (length is < 1 or > 32)
+					return source.Substring(start, length);
+
+				int slot = (length * 31 + source[start] * 7 + source[start + length - 1]) & (shortStrings.Length - 1);
+				string? cached = shortStrings[slot];
+				if (cached != null && cached.Length == length && string.CompareOrdinal(source, start, cached, 0, length) == 0)
+					return cached;
+
+				return shortStrings[slot] = source.Substring(start, length);
+			}
+
 			private static int HexValue(char c) => c switch
 			{
 				>= '0' and <= '9' => c - '0',
@@ -662,7 +675,11 @@ namespace SharpFAI.Serialization
 					peek = Peek();
 				}
 
+#if NET6_0_OR_GREATER
+				ReadOnlySpan<char> text = buffer.AsSpan(0, length);
+#else
 				string text = length == 0 ? "0" : new string(buffer, 0, length);
+#endif
 
 				if (!hasPoint && !hasExponent)
 				{

@@ -118,12 +118,23 @@ public class EventJsonConverter : JsonConverter<BaseEvent>
         // The concrete class is chosen by eventType, so the object has to be inspected before it is
         // bound. Loading it as a token keeps the reader positioned correctly; the token is then
         // handed to the concrete type's serializer, which skips the intermediate text completely.
-        JObject jsonObject = ReadObject(reader);
+        return ConvertEvent(ReadObject(reader));
+    }
 
+    internal static BaseEvent ConvertEvent(JObject jsonObject)
+    {
         var eventTypeToken = jsonObject["eventType"]
             ?? throw new JsonSerializationException("Missing 'eventType' property in JSON");
 
         string eventTypeString = eventTypeToken.ToString();
+
+        if (eventTypeString == "Twirl" && jsonObject.Count == 2 && jsonObject["floor"] is JValue { Type: JTokenType.Integer } floor)
+        {
+            if (floor.Value is int index)
+                return new SharpFAI.Events.Twirl { Floor = index };
+            if (floor.Value is long number && number >= int.MinValue && number <= int.MaxValue)
+                return new SharpFAI.Events.Twirl { Floor = (int)number };
+        }
 
         if (!EventTypeMap.TryGetValue(eventTypeString, out var targetType))
         {

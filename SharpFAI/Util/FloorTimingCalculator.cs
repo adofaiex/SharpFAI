@@ -122,9 +122,19 @@ public static class FloorTimingCalculator
         int numPlanets = 2;
 
         var eventsByFloor = new Dictionary<int, List<BaseEvent>>();
+        var twirls = new System.Collections.BitArray(floors.Length);
         foreach (var e in level.DeserializeEvents())
         {
             if (e.Floor < 0 || e.Floor >= floors.Length) continue;
+            if (e.EventType == EventType.Twirl)
+            {
+                twirls[e.Floor] = !twirls[e.Floor];
+                continue;
+            }
+            if (e.EventType is not (EventType.SetSpeed or EventType.Pause or EventType.FreeRoam
+                or EventType.Hold or EventType.MultiPlanet))
+                continue;
+
             if (!eventsByFloor.TryGetValue(e.Floor, out var list))
             {
                 list = [];
@@ -136,6 +146,8 @@ public static class FloorTimingCalculator
 
         for (int i = 0; i < floors.Length; i++)
         {
+            if (twirls[i])
+                isCCW = !isCCW;
             var f = floors[i];
             f.ExtraBeats = 0.0;
             bool hasNext = i < floors.Length - 1;
@@ -152,10 +164,6 @@ public static class FloorTimingCalculator
                 {
                     switch (e.EventType)
                     {
-                        case EventType.Twirl:
-                            isCCW = !isCCW;
-                            break;
-
                         case EventType.Pause:
                             if (hasNext && !f.MidSpin)
                             {

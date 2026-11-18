@@ -133,12 +133,29 @@ namespace SharpFAI.Serialization
             if (_root.ContainsKey("angleData"))
             {
                 angleData = (JArray)_root["angleData"]!;
-                angles = angleData.ToObject<List<double>>()!.AsReadOnly();
+                angles = ReadAngles(angleData);
             }
             else if (_root.ContainsKey("pathData"))
             {
                 InitAngleData();
             }
+        }
+
+        private static ReadOnlyCollection<double> ReadAngles(JArray source)
+        {
+            var values = new double[source.Count];
+            for (int i = 0; i < values.Length; i++)
+            {
+                switch ((source[i] as JValue)?.Value)
+                {
+                    case double number: values[i] = number; break;
+                    case float number: values[i] = number; break;
+                    case int number: values[i] = number; break;
+                    case long number: values[i] = number; break;
+                    default: return source.ToObject<List<double>>()!.AsReadOnly();
+                }
+            }
+            return Array.AsReadOnly(values);
         }
         
         /// <summary>
@@ -629,11 +646,9 @@ namespace SharpFAI.Serialization
         {
             if (_deserializedEvents == null || _deserializedEvents.Count != actions.Count)
             {
-                List<BaseEvent> baseEvents = [];
-
                 // Deserialize straight from the token: serialising the array back to text first would
                 // materialise a 34 MB string for a large chart and then parse it all over again.
-                baseEvents.AddRange(ReadEvents(actions));
+                List<BaseEvent> baseEvents = ReadEvents(actions);
 
                 if (includeDecorations && decorations != null)
                 {
@@ -648,6 +663,19 @@ namespace SharpFAI.Serialization
 
         private static List<BaseEvent> ReadEvents(JToken token)
         {
+            if (token is JArray array)
+            {
+                List<BaseEvent> events = new(array.Count);
+                foreach (JToken item in array)
+                {
+                    if (item is JObject action)
+                        events.Add(EventJsonConverter.ConvertEvent(action));
+                    else if (item is JContainer)
+                        events.AddRange(ReadEvents(item));
+                }
+                return events;
+            }
+
             List<BaseEvent> result = [];
 
             using JsonReader reader = token.CreateReader();
