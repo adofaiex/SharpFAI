@@ -6,7 +6,7 @@
     <AssemblyName>SharpFAI</AssemblyName>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <!-- Version Configuration -->
-    <VersionPrefix>1.1.5</VersionPrefix>
+    <VersionPrefix>1.1.6</VersionPrefix>
     <Version>$(VersionPrefix)</Version>
     <!-- NuGet Package Configuration -->
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>

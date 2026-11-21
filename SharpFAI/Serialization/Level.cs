@@ -221,6 +221,10 @@ namespace SharpFAI.Serialization
         {
         }
 
+        /// <summary>Copy the current chart data for a reader that needs an independent snapshot.</summary>
+        public Level CreateSnapshot(string? sourcePath = null) =>
+            new((JObject)_root.DeepClone(), sourcePath ?? pathToLevel);
+
         /// <summary>
         /// 使用默认设置创建一个新关卡并可选保存到指定路径
         /// Creates a new level with default settings and optionally saves it to the specified path
