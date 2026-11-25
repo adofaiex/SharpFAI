@@ -44,6 +44,12 @@ dotnet build SharpFAI.slnx
 dotnet add package SharpFAI
 ```
 
+## Player and Editor Audio / 播放器与编辑器音频
+
+在「设置 → 音频」启用「不加载音频」，下次加载关卡时跳过音乐解码和打击音合成。关卡仍可无声预览，视频导出也不包含音轨。播放器命令行（含截图和导出）可使用 `--no-audio`。
+
+Enable **Settings → Audio → Skip audio on next level load** to skip music decoding and hitsound synthesis. Silent playback and video export remain available. Use `--no-audio` for Player command-line runs, including screenshots and exports.
+
 ## Usage / 使用方法
 
 ```csharp
