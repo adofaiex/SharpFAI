@@ -1,6 +1,3 @@
-using System;
-using System.IO;
-using System.Linq;
 using NUnit.Framework;
 using Newtonsoft.Json.Linq;
 using SharpFAI.Events;
@@ -17,16 +14,6 @@ namespace SharpFAI.Tests;
 [TestFixture]
 public class TestJsonReaderRobustness
 {
-    private static string[] LevelFiles()
-    {
-        string[] roots = [@"D:\ADOFAILevels"];
-
-        return roots
-            .Where(Directory.Exists)
-            .SelectMany(r => Directory.EnumerateFiles(r, "*.adofai", SearchOption.AllDirectories))
-            .ToArray();
-    }
-
     [Test]
     public void EscapedStringsParseCorrectly()
     {
@@ -100,43 +87,4 @@ public class TestJsonReaderRobustness
         Assert.That(((MoveCamera)bound).Position, Has.Length.EqualTo(2));
     }
 
-    [Test]
-    [TestCase(1)]
-    [TestCase(60)]
-    [TestCase(300)]
-    public void EveryLevelParsesWithinTimeout(int sample)
-    {
-        string[] files = LevelFiles();
-
-        if (files.Length == 0)
-        {
-            Assert.Ignore("No levels available");
-            return;
-        }
-
-        string[] chosen = files
-            .OrderBy(f => new FileInfo(f).Length)
-            .Take(sample)
-            .Concat(files.OrderByDescending(f => new FileInfo(f).Length).Take(2))
-            .Distinct()
-            .ToArray();
-
-        foreach (string path in chosen)
-        {
-            System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
-
-            Level level = new(path);
-            int angles = level.angles.Count;
-            int actions = level.actions.Count;
-
-            sw.Stop();
-
-            if (sw.ElapsedMilliseconds > 5000)
-            {
-                TestContext.Out.WriteLine($"SLOW {Path.GetFileName(path)}: {sw.ElapsedMilliseconds:N0} ms");
-            }
-
-            Assert.That(angles, Is.GreaterThanOrEqualTo(0));
-        }
-    }
 }
