@@ -221,9 +221,27 @@ namespace SharpFAI.Serialization
         {
         }
 
+        /// <summary>Read a chart with optional compact storage for simple Twirl actions.</summary>
+        public Level(string pathToLevel, bool compactTwirls)
+            : this(SimpleJSON.DeserializeTokenFile(pathToLevel, compactTwirls), pathToLevel)
+        {
+        }
+
         /// <summary>Copy the current chart data for a reader that needs an independent snapshot.</summary>
         public Level CreateSnapshot(string? sourcePath = null) =>
             new((JObject)_root.DeepClone(), sourcePath ?? pathToLevel);
+
+        /// <summary>Copy a chart using a custom action representation. The returned tokens must be detached.</summary>
+        public Level CreateSnapshot(string? sourcePath, Func<JToken, JToken> copyAction)
+        {
+            JObject root = new();
+            foreach (JProperty field in _root.Properties())
+            {
+                root.Add(field.Name, field.Name == "actions" && field.Value is JArray source
+                    ? new JArray(source.Select(copyAction)) : field.Value.DeepClone());
+            }
+            return new Level(root, sourcePath ?? pathToLevel);
+        }
 
         /// <summary>
         /// 使用默认设置创建一个新关卡并可选保存到指定路径
@@ -674,6 +692,8 @@ namespace SharpFAI.Serialization
                 {
                     if (item is JObject action)
                         events.Add(EventJsonConverter.ConvertEvent(action));
+                    else if (TwirlEventToken.TryGetFloor(item, out int floor))
+                        events.Add(new SharpFAI.Events.Twirl { Floor = floor });
                     else if (item is JContainer)
                         events.AddRange(ReadEvents(item));
                 }

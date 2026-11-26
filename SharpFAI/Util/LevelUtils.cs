@@ -514,10 +514,20 @@ public static class LevelUtils
         /// <param name="usePositionTrack">Whether to apply position events during floor creation.</param>
         /// <param name="calculateLegacyEntryTimes">Whether to populate each floor's legacy entry time.</param>
         public List<Floor> CreateFloors(Vector2 startPosition, bool usePositionTrack, bool calculateLegacyEntryTimes)
+            => level.CreateFloorsCore(startPosition, usePositionTrack, calculateLegacyEntryTimes, null);
+
+        /// <summary>Build playback geometry using compact core events and the independent playback timeline.</summary>
+        public List<Floor> CreatePlaybackFloors(FloorCoreEvents coreEvents)
+            => level.CreateFloorsCore(default, false, false, coreEvents);
+
+        private List<Floor> CreateFloorsCore(Vector2 startPosition, bool usePositionTrack, bool calculateLegacyEntryTimes,
+            FloorCoreEvents? coreEvents)
         {
             progressCallback?.Invoke(0, "获取打击时间点");
             var noteTimes = calculateLegacyEntryTimes ? level.GetNoteTimes() : null;
             double[] anglesArray = level.angles.ToArray();
+            if (coreEvents != null && anglesArray.Length > 0 && anglesArray[0] == 999)
+                anglesArray[0] = 180;
             bool[] midSpins = new bool[anglesArray.Length];
             for (int i = 0; i < anglesArray.Length; i++)
             {
@@ -536,37 +546,9 @@ public static class LevelUtils
 
             int n = anglesArray.Length + 1;
             List<Floor> floors = new(n);
-            double[] SetSpeedBpm = new Double[n];
-            double[] SetSpeedMultiplier = new Double[n];
-            bool[] setSpeedIsMultiplier = new Boolean[n];
-            for (int i = 0; i < n; i++)
-            {
-                SetSpeedBpm[i] = 0;
-                SetSpeedMultiplier[i] = 0;
-                setSpeedIsMultiplier[i] = false;
-            }
-
             Vector2 startPos = new Vector2(startPosition.X, startPosition.Y);
             progressCallback?.Invoke(25, "初始化事件");
-            IReadOnlyList<BaseEvent> allEvents = level.DeserializeEvents();
-            for (int a = 0; a < allEvents.Count; a++)
-            {
-                BaseEvent eventObj = allEvents[a];
-                int floor = eventObj.Floor;
-                if (eventObj is SetSpeed setSpeed)
-                {
-                    if (setSpeed.SpeedType == EventEnums.SpeedType.Multiplier)
-                    {
-                        SetSpeedMultiplier[floor] = setSpeed.BpmMultiplier;
-                        setSpeedIsMultiplier[floor] = true;
-                    }
-                    else
-                    {
-                        SetSpeedBpm[floor] = setSpeed.BeatsPerMinute;
-                        setSpeedIsMultiplier[floor] = false;
-                    }
-                }
-            }
+            IReadOnlyList<BaseEvent> allEvents = coreEvents is null ? level.DeserializeEvents() : coreEvents.Others;
 
             // 1. 并行批量创建Floor及其Mesh
             Floor[] tileArr = new Floor[n];
@@ -578,17 +560,20 @@ public static class LevelUtils
 
             // PositionTrack 同样按地板号索引 / Index the PositionTrack events the same way
             Dictionary<int, List<PositionTrack>> positionTracksByFloor = [];
-            foreach (BaseEvent baseEvent in allEvents)
+            if (usePositionTrack)
             {
-                if (baseEvent is PositionTrack track && !track.EditorOnly)
+                foreach (BaseEvent baseEvent in allEvents)
                 {
-                    if (!positionTracksByFloor.TryGetValue(track.Floor, out List<PositionTrack>? list))
+                    if (baseEvent is PositionTrack track && !track.EditorOnly)
                     {
-                        list = [];
-                        positionTracksByFloor[track.Floor] = list;
-                    }
+                        if (!positionTracksByFloor.TryGetValue(track.Floor, out List<PositionTrack>? list))
+                        {
+                            list = [];
+                            positionTracksByFloor[track.Floor] = list;
+                        }
 
-                    list.Add(track);
+                        list.Add(track);
+                    }
                 }
             }
 
@@ -630,22 +615,34 @@ public static class LevelUtils
             for (int i = 0; i < tileArr.Length; i++)
             {
                 Floor tile = tileArr[i];
-                if (setSpeedIsMultiplier[i] && SetSpeedMultiplier[i] != 0)
+                List<BaseEvent>? floorEvents = eventsByFloor[i];
+                double targetBpm = 0, multiplier = 0;
+                bool multiply = false;
+                if (floorEvents != null)
                 {
-                    bpm *= SetSpeedMultiplier[i];
+                    foreach (BaseEvent item in floorEvents)
+                    {
+                        if (item is not SetSpeed speed) continue;
+                        multiply = speed.SpeedType == EventEnums.SpeedType.Multiplier;
+                        if (multiply) multiplier = speed.BpmMultiplier;
+                        else targetBpm = speed.BeatsPerMinute;
+                    }
+                    tile.events = floorEvents;
                 }
-                else if (SetSpeedBpm[i] != 0)
+                if (multiply && multiplier != 0)
                 {
-                    bpm = SetSpeedBpm[i];
+                    bpm *= multiplier;
+                }
+                else if (targetBpm != 0)
+                {
+                    bpm = targetBpm;
                 }
 
                 tile.bpm = bpm;
 
                 // 事件取自预建的索引 / Events come from the prebuilt index
-                List<BaseEvent>? floorEvents = eventsByFloor[i];
-                tile.events = floorEvents ?? [];
-
-                if (HasEventType(floorEvents, EventType.Twirl))
+                bool compactTwirl = coreEvents?.HasTwirl[i] == true;
+                if (compactTwirl || HasEventType(floorEvents, EventType.Twirl))
                 {
                     isCW = !isCW;
                 }
@@ -664,7 +661,8 @@ public static class LevelUtils
 
                 tile.entryTime = noteTimes?[i].Item1 ?? 0.0;
                 tile.renderOrder = -i;
-                tile.icon = ResolveFloorIcon(tile.events, tile, i > 0 ? tileArr[i - 1] : null);
+                var previous = i > 0 ? tileArr[i - 1] : null;
+                tile.icon = compactTwirl ? ResolveSwirlIcon(tile, previous) : ResolveFloorIcon(tile.events, tile, previous);
 
                 // 逐格随机的贴图变换（官方 _UV2Offset）：z 决定旋转，xy 决定平移。
                 // 官方 RandomVector() 返回 Unity Random.value，即 **0..1 全区间**，

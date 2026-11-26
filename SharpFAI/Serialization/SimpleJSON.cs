@@ -31,9 +31,11 @@ namespace SharpFAI.Serialization
 
 			private const string WORD_BREAK = " \t\n\r{}[],:\"";
 
-			// Direct index over the source text. StringReader.Peek()/Read() are virtual calls that cost
-			// more than the parse work itself on a 40 MB chart, so the parser walks the string.
-			private readonly string source;
+			// Walk the active block directly, refilling only at block boundaries.
+			private string source;
+			private TextReader? reader;
+			private readonly char[]? readBuffer;
+			private long sourceStart;
 			private readonly string?[] shortStrings = new string?[256];
 
 			private int position;
@@ -44,9 +46,26 @@ namespace SharpFAI.Serialization
 
 			private char NextChar => (char)Read();
 
-			private int Peek() => position < source.Length ? source[position] : -1;
+			private long SourcePosition => sourceStart + position;
 
-			private int Read() => position < source.Length ? source[position++] : -1;
+			private int Peek() => position < source.Length || Refill() ? source[position] : -1;
+
+			private int Read() => position < source.Length || Refill() ? source[position++] : -1;
+
+			private bool Refill()
+			{
+				if (reader is null) return false;
+				int count = reader.ReadBlock(readBuffer!, 0, readBuffer!.Length);
+				if (count == 0)
+				{
+					reader = null;
+					return false;
+				}
+				sourceStart += source.Length;
+				source = new string(readBuffer, 0, count);
+				position = 0;
+				return true;
+			}
 
 			private string NextWord
 			{
@@ -154,10 +173,25 @@ namespace SharpFAI.Serialization
 				return parser.ParseValue();
 			}
 
+			private Parser(TextReader reader)
+			{
+				this.reader = reader;
+				readBuffer = new char[32 * 1024];
+				source = string.Empty;
+			}
+
 			/// <summary>Parse into Newtonsoft tokens directly / 直接产成 Newtonsoft token.</summary>
 			public static JObject ParseToken(string jsonString)
 			{
 				using Parser parser = new Parser(jsonString);
+				return parser.ParseJValue() as JObject;
+			}
+
+			public static JObject ParseToken(TextReader reader, bool compactTwirls)
+			{
+				using Parser parser = new Parser(reader);
+				if (compactTwirls && parser.NextToken == TOKEN.CURLY_OPEN)
+					return parser.ParseJObject(compactActions: true);
 				return parser.ParseJValue() as JObject;
 			}
 
@@ -395,7 +429,7 @@ namespace SharpFAI.Serialization
 			// afterwards means allocating every object twice. Parsing straight into tokens removes the
 			// intermediate tree entirely, which is the single largest saving on a large chart.
 
-			private JObject ParseJObject()
+			private JObject ParseJObject(bool compactActions = false)
 			{
 				JObject result = [];
 				Read();
@@ -411,7 +445,7 @@ namespace SharpFAI.Serialization
 							return result;
 					}
 
-					int before = position;
+					long before = SourcePosition;
 					string key = ParseString();
 
 					if (key is null)
@@ -428,23 +462,25 @@ namespace SharpFAI.Serialization
 
 					// A chart can repeat a property name; the Dictionary-based reader overwrote it, so
 					// the token path has to keep that behaviour instead of throwing on Add.
-					result[key] = ParseJValue();
+					TOKEN value = NextToken;
+					result[key] = compactActions && key == "actions" && value == TOKEN.SQUARED_OPEN
+						? ParseJArray(compactTwirls: true) : ParseJValue(value);
 
-					if (position == before)
+					if (SourcePosition == before)
 					{
 						return result;
 					}
 				}
 			}
 
-			private JArray ParseJArray()
+			private JArray ParseJArray(bool compactTwirls = false)
 			{
 				JArray result = [];
 				Read();
 
 				while (true)
 				{
-					int before = position;
+					long before = SourcePosition;
 
 					// The token has to be passed on: reading it a second time inside ParseJValue
 					// consumes the following token as well, which desynchronises the parser on any
@@ -460,10 +496,11 @@ namespace SharpFAI.Serialization
 							continue;
 					}
 
-					result.Add(ParseJValue(token));
+					JToken item = ParseJValue(token);
+					result.Add(compactTwirls ? TwirlEventToken.Pack(item) ?? item : item);
 
 					// A malformed document must never turn into an endless append loop.
-					if (position == before)
+					if (SourcePosition == before)
 					{
 						return result;
 					}
@@ -629,6 +666,12 @@ namespace SharpFAI.Serialization
 			// Reusable buffer for numeric parsing: 200k numbers share this one buffer instead of
 			// allocating a string (or an array) per number
 			private readonly char[] numberBuffer = new char[64];
+			private static readonly object[] SmallIntegers = new object[1000];
+
+			static Parser()
+			{
+				for (int i = 0; i < SmallIntegers.Length; i++) SmallIntegers[i] = i;
+			}
 
 			/// <summary>
 			/// 直接扫描数字字符再一次性解析，避免每个数字都创建临时字符串。
@@ -685,7 +728,7 @@ namespace SharpFAI.Serialization
 				{
 					int.TryParse(text, System.Globalization.NumberStyles.Integer,
 						System.Globalization.CultureInfo.InvariantCulture, out int integer);
-					return integer;
+					return (uint)integer < (uint)SmallIntegers.Length ? SmallIntegers[integer] : (object)integer;
 				}
 
 				float.TryParse(text, System.Globalization.NumberStyles.Float,
@@ -894,10 +937,14 @@ namespace SharpFAI.Serialization
 		}
 
 		/// <summary>直接解析成 JObject（从文件）/ Parses a file straight into a <see cref="JObject"/>.</summary>
-		public static JObject DeserializeTokenFile(string path)
+		public static JObject DeserializeTokenFile(string path) => DeserializeTokenFile(path, false);
+
+		/// <summary>Parse a file with optional compact storage for simple Twirl actions.</summary>
+		public static JObject DeserializeTokenFile(string path, bool compactTwirls)
 		{
 			if (path == null) throw new ArgumentNullException(nameof(path));
-			return Parser.ParseToken(File.ReadAllText(path));
+			using var reader = File.OpenText(path);
+			return Parser.ParseToken(reader, compactTwirls);
 		}
 
 		public static Dictionary<string,object> DeserializeFile(string path)

@@ -60,7 +60,12 @@ public static class FloorTimingCalculator
     /// </summary>
     /// <param name="level">The level to calculate / 要计算的关卡</param>
     /// <returns>Floor data list, index i = floor i (count = angleData.Count + 1) / 方块数据列表，下标 i 即方块 i（数量 = angleData.Count + 1）</returns>
-    public static List<FloorData> Calculate(Level level)
+    public static List<FloorData> Calculate(Level level) => CalculateCore(level, null);
+
+    /// <summary>Calculate timing with a previously prepared set of core events.</summary>
+    public static List<FloorData> Calculate(Level level, FloorCoreEvents coreEvents) => CalculateCore(level, coreEvents);
+
+    private static List<FloorData> CalculateCore(Level level, FloorCoreEvents? coreEvents)
     {
         var angles = level.angles;
         var floors = new FloorData[angles.Count + 1];
@@ -78,7 +83,7 @@ public static class FloorTimingCalculator
             floors[i].AngleLength = GetAngleLength(floors, i, isCCW: false, numPlanets: 2, holdLength: -1);
         }
 
-        ApplyCoreEvents(level, floors);
+        ApplyCoreEvents(level, floors, coreEvents);
         CalculateEntryTimes(level, floors);
         return floors.ToList();
     }
@@ -114,7 +119,7 @@ public static class FloorTimingCalculator
     /// Applies core events to floors (scnGame.ApplyCoreEventsToFloors)
     /// 将核心事件（Twirl/Pause/FreeRoam/Hold/MultiPlanet/SetSpeed）应用到方块上
     /// </summary>
-    private static void ApplyCoreEvents(Level level, FloorData[] floors)
+    private static void ApplyCoreEvents(Level level, FloorData[] floors, FloorCoreEvents? coreEvents)
     {
         double bpm = level.GetSetting<double>("bpm");
         double speedMult = 1.0;
@@ -122,8 +127,9 @@ public static class FloorTimingCalculator
         int numPlanets = 2;
 
         var eventsByFloor = new Dictionary<int, List<BaseEvent>>();
-        var twirls = new System.Collections.BitArray(floors.Length);
-        foreach (var e in level.DeserializeEvents())
+        var twirls = coreEvents?.OddTwirls ?? new System.Collections.BitArray(floors.Length);
+        IReadOnlyList<BaseEvent> source = coreEvents is null ? level.DeserializeEvents() : coreEvents.Others;
+        foreach (var e in source)
         {
             if (e.Floor < 0 || e.Floor >= floors.Length) continue;
             if (e.EventType == EventType.Twirl)
