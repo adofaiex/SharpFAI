@@ -231,6 +231,15 @@ namespace SharpFAI.Serialization
         public Level CreateSnapshot(string? sourcePath = null) =>
             new((JObject)_root.DeepClone(), sourcePath ?? pathToLevel);
 
+        /// <summary>Replace the chart path while keeping the settings, actions, and decorations.</summary>
+        public void ReplaceAngleData(JArray path)
+        {
+            var parsed = ReadAngles(path);
+            _root["angleData"] = path;
+            angleData = (JArray)_root["angleData"]!;
+            angles = parsed;
+        }
+
         /// <summary>Copy a chart using a custom action representation. The returned tokens must be detached.</summary>
         public Level CreateSnapshot(string? sourcePath, Func<JToken, JToken> copyAction)
         {
