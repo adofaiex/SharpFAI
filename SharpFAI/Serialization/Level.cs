@@ -583,7 +583,6 @@ namespace SharpFAI.Serialization
         /// <param name="indent">Whether to format with indentation (default: true) / 是否使用缩进格式化（默认：true）</param>
         public void Save(string? newLevelPath = null, bool indent = true)
         {
-            Console.WriteLine(pathToLevel);
             if (newLevelPath == null && pathToLevel != null)
             {
                 newLevelPath = Path.Combine(Path.GetDirectoryName(pathToLevel),"level-modified.adofai");

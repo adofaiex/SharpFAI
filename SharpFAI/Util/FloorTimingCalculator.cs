@@ -60,12 +60,27 @@ public static class FloorTimingCalculator
     /// </summary>
     /// <param name="level">The level to calculate / 要计算的关卡</param>
     /// <returns>Floor data list, index i = floor i (count = angleData.Count + 1) / 方块数据列表，下标 i 即方块 i（数量 = angleData.Count + 1）</returns>
-    public static List<FloorData> Calculate(Level level) => CalculateCore(level, null);
+    public static List<FloorData> Calculate(Level level) => CalculateCore(level, null, null);
 
     /// <summary>Calculate timing with a previously prepared set of core events.</summary>
-    public static List<FloorData> Calculate(Level level, FloorCoreEvents coreEvents) => CalculateCore(level, coreEvents);
+    public static List<FloorData> Calculate(Level level, FloorCoreEvents coreEvents) => CalculateCore(level, coreEvents, null);
 
-    private static List<FloorData> CalculateCore(Level level, FloorCoreEvents? coreEvents)
+    /// <summary>Inputs required to evaluate speed changes on a tile independently of the rest of the chart.</summary>
+    public readonly struct SpeedContext(double bpm, double incomingMultiplier, double angleDegrees)
+    {
+        /// <summary>The level's base BPM.</summary>
+        public double Bpm { get; } = bpm;
+        /// <summary>The speed multiplier entering the tile.</summary>
+        public double IncomingMultiplier { get; } = incomingMultiplier;
+        /// <summary>The angle span used to interpolate speed changes inside the tile.</summary>
+        public double AngleDegrees { get; } = angleDegrees;
+    }
+
+    /// <summary>Calculate timing and collect local conversion inputs for floors with speed changes.</summary>
+    public static List<FloorData> Calculate(Level level, FloorCoreEvents? coreEvents, IDictionary<int, SpeedContext> speedContexts) =>
+        CalculateCore(level, coreEvents, speedContexts);
+
+    private static List<FloorData> CalculateCore(Level level, FloorCoreEvents? coreEvents, IDictionary<int, SpeedContext>? speedContexts)
     {
         var angles = level.angles;
         var floors = new FloorData[angles.Count + 1];
@@ -83,7 +98,7 @@ public static class FloorTimingCalculator
             floors[i].AngleLength = GetAngleLength(floors, i, isCCW: false, numPlanets: 2, holdLength: -1);
         }
 
-        ApplyCoreEvents(level, floors, coreEvents);
+        ApplyCoreEvents(level, floors, coreEvents, speedContexts);
         CalculateEntryTimes(level, floors);
         return floors.ToList();
     }
@@ -119,7 +134,8 @@ public static class FloorTimingCalculator
     /// Applies core events to floors (scnGame.ApplyCoreEventsToFloors)
     /// 将核心事件（Twirl/Pause/FreeRoam/Hold/MultiPlanet/SetSpeed）应用到方块上
     /// </summary>
-    private static void ApplyCoreEvents(Level level, FloorData[] floors, FloorCoreEvents? coreEvents)
+    private static void ApplyCoreEvents(Level level, FloorData[] floors, FloorCoreEvents? coreEvents,
+        IDictionary<int, SpeedContext>? speedContexts)
     {
         double bpm = level.GetSetting<double>("bpm");
         double speedMult = 1.0;
@@ -157,14 +173,12 @@ public static class FloorTimingCalculator
             var f = floors[i];
             f.ExtraBeats = 0.0;
             bool hasNext = i < floors.Length - 1;
-            bool hasMidFloorOffset = false;
-            double speedAverage = 1.0;
+            double floorSpeed = speedMult;
 
             if (eventsByFloor.TryGetValue(i, out var events))
             {
                 var setSpeeds = events.Where(e => e.EventType == EventType.SetSpeed)
                     .Select(e => e.ToEvent<SetSpeed>()).ToList();
-                var offsets = setSpeeds.Select(e => e.AngleOffset).Distinct().OrderBy(o => o).ToList();
 
                 foreach (var e in events)
                 {
@@ -212,66 +226,56 @@ public static class FloorTimingCalculator
                     }
                 }
 
-                if (offsets.Count > 0)
+                if (setSpeeds.Count > 0)
                 {
                     double floorAngleDeg = ApproximatelyFloor(f.EntryAngle, f.ExitAngle)
                         ? 360.0
                         : GetAngleMoved(f.EntryAngle, f.ExitAngle, !isCCW) * 57.29578;
-                    double crotchet = 60.0 / (bpm * speedMult);
-                    double totalTime = offsets[0] / 180.0 * crotchet;
-                    foreach (double angleOffset in offsets)
-                    {
-                        var lastSpeed = setSpeeds.Last(e => e.AngleOffset == angleOffset);
-                        double nextOffset = offsets.FirstOrDefault(o => o > angleOffset);
-                        if (nextOffset == 0.0)
-                        {
-                            nextOffset = floorAngleDeg;
-                        }
-
-                        double newBpm = 0.0;
-                        if (lastSpeed.SpeedType == EventEnums.SpeedType.Bpm)
-                        {
-                            newBpm = lastSpeed.BeatsPerMinute;
-                        }
-                        else
-                        {
-                            var sameOffset = setSpeeds.Where(e => e.AngleOffset == angleOffset).ToList();
-                            for (int k = 0; k < sameOffset.Count; k++)
-                            {
-                                var s = sameOffset[k];
-                                if (s.SpeedType == EventEnums.SpeedType.Bpm)
-                                {
-                                    newBpm = s.BeatsPerMinute;
-                                }
-                                else
-                                {
-                                    newBpm = (k <= 0) ? bpm * speedMult * s.BpmMultiplier : newBpm * s.BpmMultiplier;
-                                }
-                            }
-                        }
-
-                        double segCrotchet = 60.0 / newBpm;
-                        bool inFloor = angleOffset > 0.0 && angleOffset <= floorAngleDeg;
-                        totalTime += (nextOffset - angleOffset) / 180.0 * segCrotchet;
-                        if (inFloor)
-                        {
-                            hasMidFloorOffset = true;
-                        }
-
-                        speedMult = newBpm / bpm;
-                    }
-
-                    if (hasMidFloorOffset)
-                    {
-                        speedAverage = 60.0 / totalTime * (floorAngleDeg / 180.0) / bpm;
-                    }
+                    var context = new SpeedContext(bpm, speedMult, floorAngleDeg);
+                    if (speedContexts is not null)
+                        speedContexts[i] = context;
+                    floorSpeed = ResolveSpeed(context, setSpeeds, out speedMult);
                 }
             }
 
-            f.Speed = hasMidFloorOffset ? speedAverage : speedMult;
+            f.Speed = floorSpeed;
             f.IsCCW = isCCW;
             f.NumPlanets = numPlanets;
         }
+    }
+
+    /// <summary>Resolve the speed for this tile and the multiplier inherited by the next tile.</summary>
+    public static double ResolveSpeed(SpeedContext context, IReadOnlyList<SetSpeed> changes, out double nextMultiplier)
+    {
+        double bpm = context.Bpm;
+        nextMultiplier = context.IncomingMultiplier;
+        if (changes.Count == 0) return nextMultiplier;
+
+        var offsets = changes.GroupBy(change => change.AngleOffset).OrderBy(group => group.Key).ToArray();
+        double totalTime = offsets[0].Key / 180.0 * (60.0 / (bpm * nextMultiplier));
+        bool hasMidFloorOffset = false;
+        for (int index = 0; index < offsets.Length; index++)
+        {
+            var group = offsets[index];
+            double offset = group.Key;
+            var last = group.Last();
+            double nextOffset = index + 1 < offsets.Length ? offsets[index + 1].Key : context.AngleDegrees;
+            if (nextOffset == 0.0) nextOffset = context.AngleDegrees;
+
+            double newBpm = last.BeatsPerMinute;
+            if (last.SpeedType != EventEnums.SpeedType.Bpm)
+            {
+                newBpm = bpm * nextMultiplier;
+                foreach (var change in group)
+                    newBpm = change.SpeedType == EventEnums.SpeedType.Bpm ? change.BeatsPerMinute : newBpm * change.BpmMultiplier;
+            }
+
+            totalTime += (nextOffset - offset) / 180.0 * (60.0 / newBpm);
+            hasMidFloorOffset |= offset > 0 && offset <= context.AngleDegrees;
+            nextMultiplier = newBpm / bpm;
+        }
+
+        return hasMidFloorOffset ? 60.0 / totalTime * (context.AngleDegrees / 180.0) / bpm : nextMultiplier;
     }
 
     /// <summary>
