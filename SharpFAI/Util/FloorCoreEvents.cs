@@ -24,13 +24,20 @@ public sealed class FloorCoreEvents
         Read(level.actions, level.angles.Count + 1, token);
 
     /// <summary>Prepare timing events for the given number of floors, including floor zero.</summary>
-    public static FloorCoreEvents Read(JArray actions, int floorCount, CancellationToken token = default)
+    public static FloorCoreEvents Read(JArray actions, int floorCount, CancellationToken token = default) =>
+        Read(actions, floorCount, token, null);
+
+    /// <summary>Read the committed actions followed by pending appends without copying the chart.</summary>
+    public static FloorCoreEvents Read(JArray actions, int floorCount, CancellationToken token,
+        IReadOnlyList<JObject>? appendedActions)
     {
         var result = new FloorCoreEvents(floorCount);
-        for (int i = 0; i < actions.Count; i++)
+        int committedCount = actions.Count;
+        int count = committedCount + (appendedActions?.Count ?? 0);
+        for (int i = 0; i < count; i++)
         {
             if ((i & 4095) == 0) token.ThrowIfCancellationRequested();
-            JToken item = actions[i];
+            JToken item = i < committedCount ? actions[i] : appendedActions![i - committedCount];
             if (TwirlEventToken.TryGetFloor(item, out int packedFloor))
             {
                 result.AddTwirl(packedFloor);

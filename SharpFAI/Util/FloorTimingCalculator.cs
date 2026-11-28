@@ -17,6 +17,43 @@ public static class FloorTimingCalculator
     private const double Pi = 3.1415927410125732;
     private const double TwoPi = 6.2831854820251465;
     private const double FirstEntryAngle = 4.71238899230957;
+    private const int CheckpointSpacing = 128;
+
+    internal struct TimingCheckpoint(double entryAngle, double speed, bool isCCW, int numPlanets)
+    {
+        internal double EntryAngle = entryAngle;
+        internal double Speed = speed;
+        internal bool IsCCW = isCCW;
+        internal int NumPlanets = numPlanets;
+        internal double EntryTime;
+    }
+
+    /// <summary>Cached incoming timing state for an existing editor path and its settings.</summary>
+    public sealed class TimingCheckpoints
+    {
+        internal readonly int FloorCount;
+        internal readonly TimingCheckpoint[] States;
+
+        internal TimingCheckpoints(int floorCount)
+        {
+            FloorCount = floorCount;
+            States = new TimingCheckpoint[(floorCount - 1) / CheckpointSpacing + 1];
+        }
+    }
+
+    /// <summary>Recomputed timing from <paramref name="firstFloor"/> onward.</summary>
+    public sealed class EditorTiming(int firstFloor, IReadOnlyList<FloorData> floors,
+        IReadOnlyDictionary<int, SpeedContext> speedContexts, TimingCheckpoints checkpoints)
+    {
+        /// <summary>Chart index where the returned timing begins.</summary>
+        public int FirstFloor { get; } = firstFloor;
+        /// <summary>Timing for the recalculated floors, starting at FirstFloor.</summary>
+        public IReadOnlyList<FloorData> Floors { get; } = floors;
+        /// <summary>Speed conversion inputs keyed by chart floor in the recalculated range.</summary>
+        public IReadOnlyDictionary<int, SpeedContext> SpeedContexts { get; } = speedContexts;
+        /// <summary>Incoming timing states for the entire current chart.</summary>
+        public TimingCheckpoints Checkpoints { get; } = checkpoints;
+    }
 
     /// <summary>
     /// Per-floor timing state / 单个方块的时间状态
@@ -80,40 +117,71 @@ public static class FloorTimingCalculator
     public static List<FloorData> Calculate(Level level, FloorCoreEvents? coreEvents, IDictionary<int, SpeedContext> speedContexts) =>
         CalculateCore(level, coreEvents, speedContexts);
 
+    /// <summary>Reuse the previous timing prefix when only events at or after the supplied floor have changed.</summary>
+    /// <remarks>Callers must supply previous checkpoints only when the angle data and timing settings are unchanged.</remarks>
+    public static EditorTiming CalculateForEditor(Level level, FloorCoreEvents? coreEvents,
+        TimingCheckpoints? previous = null, int firstChangedFloor = 0)
+    {
+        int count = level.angles.Count + 1;
+        var checkpoints = new TimingCheckpoints(count);
+        // A planet-count event can also change the midspin directly before it.
+        int checkpointIndex = previous?.FloorCount == count && firstChangedFloor > 0 && firstChangedFloor < count
+            ? (firstChangedFloor - 1) / CheckpointSpacing : 0;
+        int firstFloor = checkpointIndex * CheckpointSpacing;
+        var contexts = new Dictionary<int, SpeedContext>();
+        TimingCheckpoint incoming = new(FirstEntryAngle, 1.0, false, 2);
+        if (checkpointIndex > 0)
+        {
+            Array.Copy(previous!.States, checkpoints.States, checkpointIndex);
+            incoming = previous.States[checkpointIndex];
+        }
+        var floors = CalculateSegment(level, coreEvents, contexts, firstFloor, incoming, checkpoints.States);
+        for (int i = checkpointIndex; i < checkpoints.States.Length; i++)
+            checkpoints.States[i].EntryTime = floors[i * CheckpointSpacing - firstFloor].EntryTime;
+
+        return new EditorTiming(firstFloor, floors, contexts, checkpoints);
+    }
+
     private static List<FloorData> CalculateCore(Level level, FloorCoreEvents? coreEvents, IDictionary<int, SpeedContext>? speedContexts)
+        => CalculateSegment(level, coreEvents, speedContexts, 0, new TimingCheckpoint(FirstEntryAngle, 1.0, false, 2), null)
+            .ToList();
+
+    private static FloorData[] CalculateSegment(Level level, FloorCoreEvents? coreEvents, IDictionary<int, SpeedContext>? speedContexts,
+        int firstFloor, TimingCheckpoint incoming, TimingCheckpoint[]? checkpoints)
     {
         var angles = level.angles;
-        var floors = new FloorData[angles.Count + 1];
+        var floors = new FloorData[angles.Count + 1 - firstFloor];
         for (int i = 0; i < floors.Length; i++)
         {
             floors[i] = new FloorData();
         }
 
-        BuildFloors(angles, floors);
+        BuildFloors(angles, floors, firstFloor, incoming.EntryAngle);
 
         // 游戏在应用事件前先用默认状态计算角度行程（供 FreeRoam 使用）
         // The game computes angle lengths with default state before applying events (used by FreeRoam)
         for (int i = 0; i < floors.Length; i++)
         {
-            floors[i].AngleLength = GetAngleLength(floors, i, isCCW: false, numPlanets: 2, holdLength: -1);
+            floors[i].AngleLength = GetAngleLength(floors[i], isCCW: false, numPlanets: 2,
+                holdLength: -1, previousMidSpin: i > 0 && floors[i - 1].MidSpin);
         }
 
-        ApplyCoreEvents(level, floors, coreEvents, speedContexts);
-        CalculateEntryTimes(level, floors);
-        return floors.ToList();
+        ApplyCoreEvents(level, floors, coreEvents, speedContexts, firstFloor, incoming, checkpoints);
+        CalculateEntryTimes(level, floors, firstFloor, incoming.EntryTime);
+        return floors;
     }
 
     /// <summary>
     /// Builds entry/exit angles from angle data (scrLevelMaker.InstantiateFloatFloors)
     /// 根据角度数据构建进块/出块角度
     /// </summary>
-    private static void BuildFloors(IList<double> angles, FloorData[] floors)
+    private static void BuildFloors(IList<double> angles, FloorData[] floors, int firstFloor, double entryAngle)
     {
-        floors[0].EntryAngle = FirstEntryAngle;
-        for (int j = 0; j < angles.Count; j++)
+        floors[0].EntryAngle = entryAngle;
+        for (int j = 0; j < floors.Length - 1; j++)
         {
             var f = floors[j];
-            double angle = angles[j];
+            double angle = angles[firstFloor + j];
             if (angle == 999)
             {
                 f.ExitAngle = f.EntryAngle;
@@ -135,19 +203,20 @@ public static class FloorTimingCalculator
     /// 将核心事件（Twirl/Pause/FreeRoam/Hold/MultiPlanet/SetSpeed）应用到方块上
     /// </summary>
     private static void ApplyCoreEvents(Level level, FloorData[] floors, FloorCoreEvents? coreEvents,
-        IDictionary<int, SpeedContext>? speedContexts)
+        IDictionary<int, SpeedContext>? speedContexts, int firstFloor, TimingCheckpoint incoming, TimingCheckpoint[]? checkpoints)
     {
         double bpm = level.GetSetting<double>("bpm");
-        double speedMult = 1.0;
-        bool isCCW = false;
-        int numPlanets = 2;
+        double speedMult = incoming.Speed;
+        bool isCCW = incoming.IsCCW;
+        int numPlanets = incoming.NumPlanets;
 
         var eventsByFloor = new Dictionary<int, List<BaseEvent>>();
-        var twirls = coreEvents?.OddTwirls ?? new System.Collections.BitArray(floors.Length);
+        int floorCount = firstFloor + floors.Length;
+        var twirls = coreEvents?.OddTwirls ?? new System.Collections.BitArray(floorCount);
         IReadOnlyList<BaseEvent> source = coreEvents is null ? level.DeserializeEvents() : coreEvents.Others;
         foreach (var e in source)
         {
-            if (e.Floor < 0 || e.Floor >= floors.Length) continue;
+            if (e.Floor < firstFloor || e.Floor >= floorCount) continue;
             if (e.EventType == EventType.Twirl)
             {
                 twirls[e.Floor] = !twirls[e.Floor];
@@ -168,14 +237,17 @@ public static class FloorTimingCalculator
 
         for (int i = 0; i < floors.Length; i++)
         {
-            if (twirls[i])
-                isCCW = !isCCW;
             var f = floors[i];
+            int floor = firstFloor + i;
+            if (checkpoints is not null && floor % CheckpointSpacing == 0)
+                checkpoints[floor / CheckpointSpacing] = new TimingCheckpoint(f.EntryAngle, speedMult, isCCW, numPlanets);
+            if (twirls[floor])
+                isCCW = !isCCW;
             f.ExtraBeats = 0.0;
             bool hasNext = i < floors.Length - 1;
             double floorSpeed = speedMult;
 
-            if (eventsByFloor.TryGetValue(i, out var events))
+            if (eventsByFloor.TryGetValue(floor, out var events))
             {
                 var setSpeeds = events.Where(e => e.EventType == EventType.SetSpeed)
                     .Select(e => e.ToEvent<SetSpeed>()).ToList();
@@ -233,7 +305,7 @@ public static class FloorTimingCalculator
                         : GetAngleMoved(f.EntryAngle, f.ExitAngle, !isCCW) * 57.29578;
                     var context = new SpeedContext(bpm, speedMult, floorAngleDeg);
                     if (speedContexts is not null)
-                        speedContexts[i] = context;
+                        speedContexts[floor] = context;
                     floorSpeed = ResolveSpeed(context, setSpeeds, out speedMult);
                 }
             }
@@ -282,7 +354,7 @@ public static class FloorTimingCalculator
     /// Calculates entry times (scrLevelMaker.CalculateFloorEntryTimes)
     /// 计算每个方块的进块时间
     /// </summary>
-    private static void CalculateEntryTimes(Level level, FloorData[] floors)
+    private static void CalculateEntryTimes(Level level, FloorData[] floors, int firstFloor, double entryTime)
     {
         double bpm = level.GetSetting<double>("bpm");
         if (bpm <= 1e-6)
@@ -290,10 +362,8 @@ public static class FloorTimingCalculator
             bpm = 120.0;
         }
 
-        if (floors.Length == 1)
-        {
-            return;
-        }
+        floors[0].EntryTime = entryTime;
+        if (floors.Length == 1) return;
 
         // 官方 scrLevelMaker.CalculateFloorEntryTimes：
         //   num = crotchetAtStart * (adjustedCountdownTicks - 1) + GetTimeBetweenAngles(floor0)
@@ -301,33 +371,30 @@ public static class FloorTimingCalculator
         // 第 1 格的 entryTime 必须包含倒计时拍数，否则整条时间轴会提前 (countdownTicks - 1) 拍。
         // Official: floor 1's entryTime includes (adjustedCountdownTicks - 1) beats of countdown;
         // omitting it shifts the whole timeline earlier by that many beats.
-        int countdownTicks = 4;
-        if (level.HasSetting("countdownTicks"))
+        int first = 0;
+        double time = entryTime;
+        if (firstFloor == 0)
         {
-            try
+            int countdownTicks = 4;
+            if (level.HasSetting("countdownTicks"))
             {
-                countdownTicks = level.GetSetting<int>("countdownTicks");
+                try
+                {
+                    countdownTicks = level.GetSetting<int>("countdownTicks");
+                }
+                catch (Exception)
+                {
+                    countdownTicks = 4;
+                }
             }
-            catch (Exception)
-            {
-                countdownTicks = 4;
-            }
+            var opening = floors[0];
+            time = (60.0 / bpm) * (Math.Max(1, countdownTicks) - 1)
+                   + GetTimeBetweenAngles(opening.EntryAngle, opening.ExitAngle, opening.Speed, bpm, !opening.IsCCW);
+            floors[1].EntryTime = time;
+            first = 1;
         }
 
-        if (countdownTicks < 1)
-        {
-            countdownTicks = 1;
-        }
-
-        double crotchet = 60.0 / bpm;
-
-        var first = floors[0];
-        double time = crotchet * (countdownTicks - 1)
-                      + GetTimeBetweenAngles(first.EntryAngle, first.ExitAngle, first.Speed, bpm, !first.IsCCW);
-        floors[0].EntryTime = 0.0;
-        floors[1].EntryTime = time;
-
-        for (int i = 1; i < floors.Length - 1; i++)
+        for (int i = first; i < floors.Length - 1; i++)
         {
             var f = floors[i];
             double num3 = GetInverseAnglePerBeatMultiplanet(f.NumPlanets) * (f.IsCCW ? -1 : 1);
@@ -336,7 +403,7 @@ public static class FloorTimingCalculator
                 num3 = 0.0;
             }
 
-            if (floors[i - 1].MidSpin && f.NumPlanets > 2)
+            if (f.NumPlanets > 2 && (i > 0 ? floors[i - 1].MidSpin : level.angles[firstFloor - 1] == 999))
             {
                 num3 -= (TwoPi + GetInverseAnglePerBeatMultiplanet(f.NumPlanets)) * (f.IsCCW ? -1 : 1);
             }
@@ -365,16 +432,15 @@ public static class FloorTimingCalculator
     /// Calculates a floor's angle length (scrLevelMaker.CalculateSingleFloorAngleLength)
     /// 计算方块的角度行程
     /// </summary>
-    private static double GetAngleLength(FloorData[] floors, int i, bool isCCW, int numPlanets, int holdLength)
+    private static double GetAngleLength(FloorData cf, bool isCCW, int numPlanets, int holdLength, bool previousMidSpin)
     {
-        var cf = floors[i];
         double num = GetInverseAnglePerBeatMultiplanet(numPlanets) * ((!isCCW) ? 1 : -1);
         if (cf.MidSpin)
         {
             num = 0.0;
         }
 
-        if (i > 0 && floors[i - 1].MidSpin && numPlanets > 2)
+        if (previousMidSpin && numPlanets > 2)
         {
             num -= (TwoPi + GetInverseAnglePerBeatMultiplanet(numPlanets)) * ((!isCCW) ? 1 : -1);
         }
